@@ -39,7 +39,7 @@
     },
     "cloudflare_tunnel": {
         "enabled": true,
-        "hostname": "YOUR_SUBDOMAIN.YOUR_DOMAIN.com",
+        "hostname": null,
         "config_path": null
     },
     "database": {

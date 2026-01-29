@@ -187,8 +187,16 @@ cp config.json.example config.json
 | 項目 | 説明 |
 |------|------|
 | `enabled` | Cloudflare Tunnelの有効/無効 |
-| `hostname` | トンネルのホスト名（DNS設定済み） |
+| `hostname` | トンネルのホスト名（nullでQuick Tunnel） |
 | `config_path` | cloudflared設定ファイルパス（nullでQuick Tunnel） |
+
+**Quick Tunnel モード（推奨）:**
+
+`hostname` と `config_path` の両方を `null` にすると、Cloudflare Quick Tunnelを使用します。
+
+- ドメイン不要、認証不要で即座に使える
+- 起動ごとにランダムなURL（`xxx.trycloudflare.com`）が生成される
+- **自動クリーンアップ**: 起動時に古いWebhook URLをSwitchBotから自動削除し、新しいURLを登録
 
 ### database
 

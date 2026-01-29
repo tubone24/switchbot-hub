@@ -205,23 +205,42 @@ class SwitchBotMonitor:
 
         return True
 
+    def cleanup_old_webhooks(self):
+        """
+        Remove all existing webhooks from SwitchBot.
+        Called on startup to clean up old Quick Tunnel URLs.
+        """
+        try:
+            current = self.api.query_webhook()
+            urls = current.get('urls', [])
+
+            if not urls:
+                logging.info("No existing webhooks to clean up")
+                return True
+
+            logging.info("Found %d existing webhook(s) to clean up", len(urls))
+
+            for url in urls:
+                try:
+                    self.api.delete_webhook(url)
+                    logging.info("Deleted old webhook: %s", url)
+                except Exception as e:
+                    logging.warning("Failed to delete webhook %s: %s", url, e)
+
+            return True
+        except Exception as e:
+            logging.warning("Failed to query webhooks for cleanup: %s", e)
+            return False
+
     def register_webhook(self):
         """Register webhook URL with SwitchBot API."""
         if not self.webhook_url:
             logging.warning("No webhook URL available")
             return False
 
-        # Check if webhook already registered
-        try:
-            current = self.api.query_webhook()
-            urls = current.get('urls', [])
-            logging.info("Current webhooks: %s", urls)
-
-            if self.webhook_url in urls:
-                logging.info("Webhook already registered")
-                return True
-        except Exception as e:
-            logging.warning("Failed to query webhook: %s", e)
+        # First, clean up any old webhooks (important for Quick Tunnel)
+        # Quick Tunnel generates new URLs on each restart
+        self.cleanup_old_webhooks()
 
         # Register new webhook
         try:
@@ -438,7 +457,10 @@ class SwitchBotMonitor:
         webhook_enabled = self.setup_webhook_server()
 
         # Register webhook if enabled and URL available
+        # Always register for Quick Tunnel (trycloudflare.com) since URL changes on restart
         if webhook_enabled and self.webhook_url and 'localhost' not in self.webhook_url:
+            if 'trycloudflare.com' in self.webhook_url:
+                logging.info("Quick Tunnel detected - cleaning up old webhooks and registering new URL")
             self.register_webhook()
 
         # Send startup notification
