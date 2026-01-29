@@ -1,0 +1,24 @@
+{
+    "switchbot": {
+        "token": "YOUR_SWITCHBOT_API_TOKEN",
+        "secret": "YOUR_SWITCHBOT_API_SECRET"
+    },
+    "slack": {
+        "webhook_url": "https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
+        "enabled": true,
+        "notify_startup": true,
+        "notify_errors": true
+    },
+    "monitor": {
+        "interval_seconds": 300,
+        "device_ids": []
+    },
+    "database": {
+        "path": "device_states.db",
+        "history_days": 30
+    },
+    "logging": {
+        "level": "INFO",
+        "file": null
+    }
+}
