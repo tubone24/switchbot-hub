@@ -10,12 +10,46 @@
         "notify_errors": true
     },
     "monitor": {
-        "interval_seconds": 300,
-        "device_ids": []
+        "interval_seconds": 1800,
+        "ignore_devices": [
+            "テープライト BA",
+            "学習リモコン 23",
+            "サーキュレーター B7",
+            "玄関通話",
+            "おいだき",
+            "アロマディヒューザー",
+            "ハブミニ DC",
+            "玄関Open",
+            "ハブミニ C6",
+            "キーパッド"
+        ],
+        "polling_devices": [
+            "CO2センサー（温湿度計） 3A",
+            "CO2センサー（温湿度計） C3",
+            "温湿度計Pro 7B",
+            "CO2センサー（温湿度計） 17",
+            "防水温湿度計 1C",
+            "ハブ２ 19"
+        ]
+    },
+    "webhook": {
+        "enabled": true,
+        "port": 8080,
+        "path": "/switchbot/webhook"
+    },
+    "cloudflare_tunnel": {
+        "enabled": true,
+        "hostname": "YOUR_SUBDOMAIN.YOUR_DOMAIN.com",
+        "config_path": null
     },
     "database": {
         "path": "device_states.db",
-        "history_days": 30
+        "history_days": 30,
+        "sensor_data_days": 7
+    },
+    "daily_report": {
+        "enabled": true,
+        "hour": 8
     },
     "logging": {
         "level": "INFO",

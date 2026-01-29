@@ -62,6 +62,26 @@ class DeviceDatabase:
             ON device_history(device_id, recorded_at)
         ''')
 
+        # Time series table for sensor data (temperature, humidity, CO2)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sensor_timeseries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                device_name TEXT,
+                recorded_at TEXT NOT NULL,
+                temperature REAL,
+                humidity REAL,
+                co2 INTEGER,
+                battery INTEGER
+            )
+        ''')
+
+        # Index for time series queries
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_timeseries_device_date
+            ON sensor_timeseries(device_id, recorded_at)
+        ''')
+
         conn.commit()
         conn.close()
 
@@ -255,6 +275,232 @@ class DeviceDatabase:
 
         cursor.execute('''
             DELETE FROM device_history
+            WHERE recorded_at < datetime('now', '-{} days')
+        '''.format(int(days)))
+
+        deleted = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        return deleted
+
+    # ========== Sensor Time Series Methods ==========
+
+    def save_sensor_data(self, device_id, device_name, status):
+        """
+        Save sensor time series data (temperature, humidity, CO2).
+
+        Args:
+            device_id: Device ID
+            device_name: Device name
+            status: Status dict from API
+
+        Returns:
+            bool: True if data was saved
+        """
+        # Extract sensor values
+        temperature = status.get('temperature')
+        humidity = status.get('humidity')
+        co2 = status.get('CO2')
+        battery = status.get('battery')
+
+        # Only save if there's sensor data
+        if temperature is None and humidity is None and co2 is None:
+            return False
+
+        now = datetime.utcnow().isoformat()
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            INSERT INTO sensor_timeseries
+            (device_id, device_name, recorded_at, temperature, humidity, co2, battery)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (device_id, device_name, now, temperature, humidity, co2, battery))
+
+        conn.commit()
+        conn.close()
+
+        return True
+
+    def get_sensor_data_for_date(self, device_id, date_str=None):
+        """
+        Get sensor data for a specific date.
+
+        Args:
+            device_id: Device ID
+            date_str: Date string (YYYY-MM-DD), defaults to today
+
+        Returns:
+            list: List of sensor readings for the day
+        """
+        if date_str is None:
+            date_str = datetime.utcnow().strftime('%Y-%m-%d')
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT * FROM sensor_timeseries
+            WHERE device_id = ?
+            AND date(recorded_at) = date(?)
+            ORDER BY recorded_at ASC
+        ''', (device_id, date_str))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [
+            {
+                'device_id': row['device_id'],
+                'device_name': row['device_name'],
+                'recorded_at': row['recorded_at'],
+                'temperature': row['temperature'],
+                'humidity': row['humidity'],
+                'co2': row['co2'],
+                'battery': row['battery']
+            }
+            for row in rows
+        ]
+
+    def get_sensor_data_range(self, device_id, start_date, end_date):
+        """
+        Get sensor data for a date range.
+
+        Args:
+            device_id: Device ID
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+
+        Returns:
+            list: List of sensor readings
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT * FROM sensor_timeseries
+            WHERE device_id = ?
+            AND date(recorded_at) >= date(?)
+            AND date(recorded_at) <= date(?)
+            ORDER BY recorded_at ASC
+        ''', (device_id, start_date, end_date))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [
+            {
+                'device_id': row['device_id'],
+                'device_name': row['device_name'],
+                'recorded_at': row['recorded_at'],
+                'temperature': row['temperature'],
+                'humidity': row['humidity'],
+                'co2': row['co2'],
+                'battery': row['battery']
+            }
+            for row in rows
+        ]
+
+    def get_all_sensor_devices(self):
+        """
+        Get list of devices with sensor data.
+
+        Returns:
+            list: List of device info dicts
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT DISTINCT device_id, device_name
+            FROM sensor_timeseries
+            ORDER BY device_name
+        ''')
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [
+            {'device_id': row['device_id'], 'device_name': row['device_name']}
+            for row in rows
+        ]
+
+    def get_daily_summary(self, device_id, date_str=None):
+        """
+        Get daily summary statistics for a device.
+
+        Args:
+            device_id: Device ID
+            date_str: Date string (YYYY-MM-DD), defaults to today
+
+        Returns:
+            dict: Summary with min/max/avg for each metric
+        """
+        if date_str is None:
+            date_str = datetime.utcnow().strftime('%Y-%m-%d')
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT
+                COUNT(*) as count,
+                MIN(temperature) as temp_min,
+                MAX(temperature) as temp_max,
+                AVG(temperature) as temp_avg,
+                MIN(humidity) as humidity_min,
+                MAX(humidity) as humidity_max,
+                AVG(humidity) as humidity_avg,
+                MIN(co2) as co2_min,
+                MAX(co2) as co2_max,
+                AVG(co2) as co2_avg
+            FROM sensor_timeseries
+            WHERE device_id = ?
+            AND date(recorded_at) = date(?)
+        ''', (device_id, date_str))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row and row['count'] > 0:
+            return {
+                'date': date_str,
+                'count': row['count'],
+                'temperature': {
+                    'min': row['temp_min'],
+                    'max': row['temp_max'],
+                    'avg': round(row['temp_avg'], 1) if row['temp_avg'] else None
+                },
+                'humidity': {
+                    'min': row['humidity_min'],
+                    'max': row['humidity_max'],
+                    'avg': round(row['humidity_avg'], 1) if row['humidity_avg'] else None
+                },
+                'co2': {
+                    'min': row['co2_min'],
+                    'max': row['co2_max'],
+                    'avg': round(row['co2_avg']) if row['co2_avg'] else None
+                }
+            }
+        return None
+
+    def cleanup_old_sensor_data(self, days=7):
+        """
+        Remove sensor time series data older than specified days.
+
+        Args:
+            days: Number of days to keep
+
+        Returns:
+            int: Number of deleted records
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            DELETE FROM sensor_timeseries
             WHERE recorded_at < datetime('now', '-{} days')
         '''.format(int(days)))
 

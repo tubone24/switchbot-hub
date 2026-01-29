@@ -145,6 +145,89 @@ class SwitchBotAPI:
 
         return results
 
+    # ========== Webhook Management ==========
+
+    def setup_webhook(self, url):
+        """
+        Setup webhook URL for receiving device events.
+
+        Args:
+            url: Webhook URL to receive events
+
+        Returns:
+            dict: API response
+        """
+        data = {
+            'action': 'setupWebhook',
+            'url': url,
+            'deviceList': 'ALL'
+        }
+        return self._request('POST', '/webhook/setupWebhook', data)
+
+    def query_webhook(self):
+        """
+        Query current webhook configuration.
+
+        Returns:
+            dict: Current webhook settings (urls list)
+        """
+        data = {
+            'action': 'queryUrl'
+        }
+        return self._request('POST', '/webhook/queryWebhook', data)
+
+    def query_webhook_details(self, url):
+        """
+        Query webhook details for a specific URL.
+
+        Args:
+            url: Webhook URL to query
+
+        Returns:
+            dict: Webhook details (deviceList, createTime, lastUpdateTime)
+        """
+        data = {
+            'action': 'queryDetails',
+            'urls': [url]
+        }
+        return self._request('POST', '/webhook/queryWebhook', data)
+
+    def update_webhook(self, url, enable=True):
+        """
+        Update webhook configuration.
+
+        Args:
+            url: Webhook URL
+            enable: Enable or disable the webhook
+
+        Returns:
+            dict: API response
+        """
+        data = {
+            'action': 'updateWebhook',
+            'config': {
+                'url': url,
+                'enable': enable
+            }
+        }
+        return self._request('POST', '/webhook/updateWebhook', data)
+
+    def delete_webhook(self, url):
+        """
+        Delete webhook configuration.
+
+        Args:
+            url: Webhook URL to delete
+
+        Returns:
+            dict: API response
+        """
+        data = {
+            'action': 'deleteWebhook',
+            'url': url
+        }
+        return self._request('POST', '/webhook/deleteWebhook', data)
+
 
 if __name__ == '__main__':
     # Simple test - requires config.json
