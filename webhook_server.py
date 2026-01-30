@@ -22,11 +22,17 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
     def _send_response(self, status_code, body=None):
         """Send HTTP response."""
-        self.send_response(status_code)
-        self.send_header('Content-Type', 'application/json')
-        self.end_headers()
-        if body:
-            self.wfile.write(json.dumps(body).encode('utf-8'))
+        try:
+            self.send_response(status_code)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            if body:
+                self.wfile.write(json.dumps(body).encode('utf-8'))
+        except BrokenPipeError:
+            # Client closed connection before response - this is OK for webhooks
+            pass
+        except Exception as e:
+            logging.debug("Error sending response: %s", e)
 
     def do_GET(self):
         """Handle GET requests (health check)."""
