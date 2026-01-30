@@ -259,7 +259,7 @@ flowchart TB
 
         db --> security["#home-security<br/>防犯通知（日本語）"]
         db --> atmos["#atmos-update<br/>環境変化通知"]
-        db --> graph["#atmos-graph<br/>5分ごとグラフ"]
+        db --> atmosGraph["#atmos-graph<br/>5分ごとグラフ"]
     end
 ```
 
