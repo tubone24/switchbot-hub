@@ -5,12 +5,32 @@ Python 3.7+ compatible, requires only requests library.
 """
 import json
 import logging
+from datetime import datetime, timedelta
 try:
     from urllib.parse import urlencode, quote
 except ImportError:
     from urllib import urlencode, quote
 
 import requests
+
+
+def utc_to_jst(time_str):
+    """
+    Convert UTC time string (HH:MM) to JST (UTC+9).
+
+    Args:
+        time_str: Time in HH:MM format (UTC)
+
+    Returns:
+        str: Time in HH:MM format (JST)
+    """
+    try:
+        hour, minute = map(int, time_str.split(':'))
+        # Add 9 hours for JST
+        hour = (hour + 9) % 24
+        return '{:02d}:{:02d}'.format(hour, minute)
+    except (ValueError, AttributeError):
+        return time_str
 
 
 class ChartGenerator:
@@ -138,20 +158,21 @@ class ChartGenerator:
         if not sensor_data:
             return None
 
-        # Extract time labels (HH:MM format)
+        # Extract time labels (HH:MM format, converted to JST)
         labels = []
         temperatures = []
         humidities = []
         co2_values = []
 
         for reading in sensor_data:
-            # Parse timestamp and format as HH:MM
+            # Parse timestamp and format as HH:MM (JST)
             timestamp = reading['recorded_at']
             if 'T' in timestamp:
-                time_part = timestamp.split('T')[1][:5]
+                time_utc = timestamp.split('T')[1][:5]
             else:
-                time_part = timestamp[11:16]
-            labels.append(time_part)
+                time_utc = timestamp[11:16]
+            time_jst = utc_to_jst(time_utc)
+            labels.append(time_jst)
 
             temperatures.append(reading['temperature'])
             humidities.append(reading['humidity'])
@@ -301,30 +322,32 @@ class ChartGenerator:
             ('rgb(155, 89, 182)', 'rgba(155, 89, 182, 0.1)'),   # Violet
         ]
 
-        # Find all unique time labels
+        # Find all unique time labels (convert UTC to JST)
         all_times = set()
         for data in devices_data.values():
             for reading in data:
                 timestamp = reading['recorded_at']
                 if 'T' in timestamp:
-                    time_part = timestamp.split('T')[1][:5]
+                    time_utc = timestamp.split('T')[1][:5]
                 else:
-                    time_part = timestamp[11:16]
-                all_times.add(time_part)
+                    time_utc = timestamp[11:16]
+                time_jst = utc_to_jst(time_utc)
+                all_times.add(time_jst)
 
         labels = sorted(list(all_times))
 
         datasets = []
         for i, (device_name, data) in enumerate(devices_data.items()):
-            # Build time -> value mapping
+            # Build time -> value mapping (using JST)
             time_values = {}
             for reading in data:
                 timestamp = reading['recorded_at']
                 if 'T' in timestamp:
-                    time_part = timestamp.split('T')[1][:5]
+                    time_utc = timestamp.split('T')[1][:5]
                 else:
-                    time_part = timestamp[11:16]
-                time_values[time_part] = reading.get(metric)
+                    time_utc = timestamp[11:16]
+                time_jst = utc_to_jst(time_utc)
+                time_values[time_jst] = reading.get(metric)
 
             # Fill data array
             values = [time_values.get(t) for t in labels]
