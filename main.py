@@ -396,7 +396,7 @@ class SwitchBotMonitor:
             return
 
         # Collect all sensor data for combined chart
-        all_sensor_data = []
+        devices_data = {}  # {device_name: sensor_data_list}
         devices_summary = []
 
         for device in sensor_devices:
@@ -411,10 +411,7 @@ class SwitchBotMonitor:
                     logging.debug("No data for %s on %s", device_name, date_str)
                     continue
 
-                all_sensor_data.append({
-                    'device_name': device_name,
-                    'data': sensor_data
-                })
+                devices_data[device_name] = sensor_data
 
                 # Get latest values for summary
                 latest = sensor_data[-1] if sensor_data else {}
@@ -428,21 +425,25 @@ class SwitchBotMonitor:
             except Exception as e:
                 logging.error("Error getting data for %s: %s", device_name, e)
 
-        if not all_sensor_data:
+        if not devices_data:
             logging.info("No sensor data collected for graph report")
             return
 
-        # Generate combined chart (use first device's data for now, or implement multi-device chart)
+        # Generate multi-device charts (color-coded by device)
         chart_urls = {}
         try:
-            # Use the first device's data for chart generation
-            first_device = all_sensor_data[0]
-            chart_urls = self.chart_generator.generate_sensor_chart(
-                first_device['data'],
-                first_device['device_name'],
-                date_str,
-                use_short_url=True
+            # Temperature chart (all devices)
+            chart_urls['temp_humidity'] = self.chart_generator.generate_multi_device_chart(
+                devices_data, 'temperature', date_str, use_short_url=True
             )
+            logging.debug("Generated temperature chart")
+
+            # CO2 chart (all devices)
+            chart_urls['co2'] = self.chart_generator.generate_multi_device_chart(
+                devices_data, 'co2', date_str, use_short_url=True
+            )
+            logging.debug("Generated CO2 chart")
+
         except Exception as e:
             logging.error("Error generating chart: %s", e)
 

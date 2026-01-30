@@ -287,12 +287,18 @@ class ChartGenerator:
         Returns:
             str: Chart URL
         """
+        # More colors for multiple devices
         colors = [
-            ('rgb(255, 99, 132)', 'rgba(255, 99, 132, 0.1)'),
-            ('rgb(54, 162, 235)', 'rgba(54, 162, 235, 0.1)'),
-            ('rgb(75, 192, 192)', 'rgba(75, 192, 192, 0.1)'),
-            ('rgb(255, 206, 86)', 'rgba(255, 206, 86, 0.1)'),
-            ('rgb(153, 102, 255)', 'rgba(153, 102, 255, 0.1)'),
+            ('rgb(255, 99, 132)', 'rgba(255, 99, 132, 0.1)'),   # Red
+            ('rgb(54, 162, 235)', 'rgba(54, 162, 235, 0.1)'),   # Blue
+            ('rgb(75, 192, 192)', 'rgba(75, 192, 192, 0.1)'),   # Teal
+            ('rgb(255, 159, 64)', 'rgba(255, 159, 64, 0.1)'),   # Orange
+            ('rgb(153, 102, 255)', 'rgba(153, 102, 255, 0.1)'), # Purple
+            ('rgb(255, 206, 86)', 'rgba(255, 206, 86, 0.1)'),   # Yellow
+            ('rgb(231, 76, 60)', 'rgba(231, 76, 60, 0.1)'),     # Dark Red
+            ('rgb(46, 204, 113)', 'rgba(46, 204, 113, 0.1)'),   # Green
+            ('rgb(52, 73, 94)', 'rgba(52, 73, 94, 0.1)'),       # Dark Gray
+            ('rgb(155, 89, 182)', 'rgba(155, 89, 182, 0.1)'),   # Violet
         ]
 
         # Find all unique time labels
@@ -323,6 +329,10 @@ class ChartGenerator:
             # Fill data array
             values = [time_values.get(t) for t in labels]
 
+            # Skip if all values are None
+            if all(v is None for v in values):
+                continue
+
             color_idx = i % len(colors)
             datasets.append({
                 'label': device_name,
@@ -330,20 +340,73 @@ class ChartGenerator:
                 'borderColor': colors[color_idx][0],
                 'backgroundColor': colors[color_idx][1],
                 'fill': False,
-                'tension': 0.3
+                'tension': 0.3,
+                'spanGaps': True  # Connect points across null values
             })
 
+        # Skip if no datasets have data
+        if not datasets:
+            return None
+
         metric_labels = {
-            'temperature': 'Temperature (C)',
-            'humidity': 'Humidity (%)',
+            'temperature': '温度 (°C)',
+            'humidity': '湿度 (%)',
             'co2': 'CO2 (ppm)'
         }
+
+        metric_units = {
+            'temperature': '°C',
+            'humidity': '%',
+            'co2': 'ppm'
+        }
+
+        options = {
+            'scales': {
+                'y': {
+                    'title': {
+                        'display': True,
+                        'text': metric_units.get(metric, '')
+                    }
+                }
+            },
+            'plugins': {
+                'legend': {
+                    'display': True,
+                    'position': 'bottom'
+                }
+            }
+        }
+
+        # Add CO2 threshold lines
+        if metric == 'co2':
+            options['scales']['y']['min'] = 400
+            options['plugins']['annotation'] = {
+                'annotations': {
+                    'warning': {
+                        'type': 'line',
+                        'yMin': 1000,
+                        'yMax': 1000,
+                        'borderColor': 'orange',
+                        'borderWidth': 2,
+                        'borderDash': [5, 5]
+                    },
+                    'danger': {
+                        'type': 'line',
+                        'yMin': 1500,
+                        'yMax': 1500,
+                        'borderColor': 'red',
+                        'borderWidth': 2,
+                        'borderDash': [5, 5]
+                    }
+                }
+            }
 
         config = self._create_chart_config(
             'line',
             labels,
             datasets,
-            title='{} Comparison ({})'.format(metric_labels.get(metric, metric), date_str)
+            title='{} ({})'.format(metric_labels.get(metric, metric), date_str),
+            options=options
         )
 
         return self.get_chart_url(config, use_short_url)
