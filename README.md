@@ -59,15 +59,60 @@ SwitchBotデバイスとNetatmo Weather Stationの状態を監視し、変化が
 
 ### 2. Netatmo API認証情報の取得（オプション）
 
+#### ステップ1: Netatmoアプリの作成
+
 1. [Netatmo Connect](https://dev.netatmo.com/) にアクセス
 2. **Create an App** でアプリを作成
-   - App Name: 任意の名前
+   - App Name: 任意の名前（例: `Home Monitor`）
    - Description: 任意の説明
    - Data Protection Officer: 自分の名前とメールアドレス
-3. **Client ID** と **Client Secret** を保存
-4. OAuth2認証を完了してリフレッシュトークンを取得:
-   - Netatmoの[認証ドキュメント](https://dev.netatmo.com/apidocumentation/oauth)を参照
-   - スコープ: `read_station`
+3. **Client ID** と **Client Secret** をメモ
+
+#### ステップ2: 認証ヘルパーでリフレッシュトークンを取得
+
+```bash
+# 認証ヘルパーを実行
+python netatmo_auth.py
+```
+
+対話形式で案内されます:
+1. Client ID を入力
+2. Client Secret を入力
+3. ブラウザが自動で開く → Netatmoにログイン → 許可
+4. リフレッシュトークンが表示される
+
+```
+$ python netatmo_auth.py
+============================================================
+Netatmo OAuth2 認証ヘルパー
+============================================================
+
+Client ID を入力: xxxxxxxxxxxxxxxxxxxxxxxx
+Client Secret を入力: xxxxxxxxxxxxxxxxxxxxxxxx
+
+ブラウザで以下のURLを開きます...
+
+認可コードを取得しました!
+
+トークン取得成功!
+
+Refresh Token: xxxxxxxxxxxxxxxxxxxxxxxx
+
+============================================================
+config.json に以下を追加してください:
+============================================================
+{
+    "netatmo": {
+        "enabled": true,
+        "client_id": "xxxxxxxx",
+        "client_secret": "xxxxxxxx",
+        "refresh_token": "xxxxxxxx",
+        ...
+    }
+}
+```
+
+> **Note**: 認証情報は `netatmo_credentials.json` に保存することもできます（スクリプト内で選択可能）
 
 ### 3. Slack Incoming Webhookの設定
 
@@ -386,6 +431,7 @@ switchbot-hub/
 ├── main.py                 # メインエントリーポイント
 ├── switchbot_api.py        # SwitchBot API v1.1クライアント
 ├── netatmo_api.py          # Netatmo Weather Station APIクライアント
+├── netatmo_auth.py         # Netatmo OAuth2認証ヘルパー
 ├── database.py             # SQLite状態管理・時系列データ
 ├── slack_notifier.py       # Slack通知（複数チャンネル対応）
 ├── webhook_server.py       # HTTPサーバー（Webhook受信）

@@ -673,6 +673,11 @@ class SwitchBotMonitor:
             self.poll_netatmo()
             self.last_netatmo_poll = time.time()
 
+        # Send initial graph report immediately after first poll
+        if self.config.get('graph_report', {}).get('enabled', False):
+            logging.info("Sending initial graph report...")
+            self.send_graph_report()
+
         # Initialize graph report timer
         self.last_graph_report = time.time()
 
