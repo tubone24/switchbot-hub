@@ -374,13 +374,11 @@ class SwitchBotMonitor:
         Send daily report for all sensor devices.
 
         Args:
-            date_str: Date to report (YYYY-MM-DD), defaults to yesterday
+            date_str: Date to report (YYYY-MM-DD), defaults to today
         """
         if date_str is None:
-            # Default to yesterday
-            from datetime import timedelta
-            yesterday = datetime.utcnow() - timedelta(days=1)
-            date_str = yesterday.strftime('%Y-%m-%d')
+            # Default to today (report shows data from midnight to now)
+            date_str = datetime.now().strftime('%Y-%m-%d')
 
         logging.info("Generating daily report for %s...", date_str)
 
