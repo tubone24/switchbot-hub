@@ -138,12 +138,9 @@ class SwitchBotMonitor:
         db_path = config.get('database', {}).get('path', 'device_states.db')
         self.db = DeviceDatabase(db_path)
 
-        # Initialize Slack
+        # Initialize Slack with new multi-channel config
         slack_config = config.get('slack', {})
-        self.slack = SlackNotifier(
-            webhook_url=slack_config.get('webhook_url', ''),
-            enabled=slack_config.get('enabled', True)
-        )
+        self.slack = SlackNotifier(slack_config)
 
         # Device map
         self.device_map = {}
@@ -156,8 +153,8 @@ class SwitchBotMonitor:
         # Chart generator
         self.chart_generator = ChartGenerator()
 
-        # Daily report tracking
-        self.last_report_date = None
+        # Graph report tracking (5-minute interval)
+        self.last_graph_report = 0
 
     def setup_webhook_server(self):
         """Setup webhook server and Cloudflare tunnel."""
@@ -280,6 +277,7 @@ class SwitchBotMonitor:
                     'category': 'webhook'
                 }
 
+            device_id = device_info['device_id']
             device_name = device_info['device_name']
             device_type = device_info['device_type']
             status = parsed['status']
@@ -290,23 +288,35 @@ class SwitchBotMonitor:
             )
 
             # Get previous state
-            previous = self.db.get_device_state(device_info['device_id'])
+            previous = self.db.get_device_state(device_id)
             previous_status = previous['status'] if previous else None
 
             # Save new state
             changed = self.db.save_device_state(
-                device_info['device_id'],
+                device_id,
                 device_name,
                 device_type,
                 status
             )
 
-            if changed:
-                changes = self.db.get_changes(device_info['device_id'], previous_status, status)
-                logging.info("State changed: %s", changes)
+            # Save sensor data if it's an atmosphere sensor (for graphs)
+            if self._is_sensor_device(device_type):
+                self.db.save_sensor_data(device_id, device_name, status)
+                logging.debug("Saved webhook sensor data for %s", device_name)
 
-                # Send Slack notification
-                self.slack.notify_device_change(device_name, device_type, changes, status)
+            # Send notification based on device category
+            if changed:
+                category = self.slack.get_device_category(device_type)
+
+                if category == 'security':
+                    # Security notification to #home-security
+                    self.slack.notify_security_event(device_name, device_type, status)
+                elif category == 'atmos':
+                    # Atmosphere notification to #atmos-update
+                    self.slack.notify_atmos_update(device_name, device_type, status)
+                else:
+                    # Other devices - log only for now
+                    logging.info("Device %s changed but no notification channel configured", device_name)
 
         except Exception as e:
             logging.error("Error handling webhook event: %s", e)
@@ -346,15 +356,16 @@ class SwitchBotMonitor:
                     self.db.save_sensor_data(device_id, device_name, status)
                     logging.debug("Saved sensor data for %s", device_name)
 
+                # Note: For polling devices, we don't send individual notifications
+                # The data is collected for the periodic graph report
                 if changed:
-                    changes = self.db.get_changes(device_id, previous_status, status)
                     logging.info(
-                        "[Polling] Device %s (%s) state changed: %s",
-                        device_name, device_type, changes
+                        "[Polling] Device %s: temp=%.1f, humidity=%d, CO2=%s",
+                        device_name,
+                        status.get('temperature', 0),
+                        status.get('humidity', 0),
+                        status.get('CO2', 'N/A')
                     )
-                    self.slack.notify_device_change(device_name, device_type, changes, status)
-                else:
-                    logging.debug("Device %s unchanged", device_name)
 
             except Exception as e:
                 logging.error("Error polling %s: %s", device_name, e)
@@ -369,69 +380,92 @@ class SwitchBotMonitor:
         ]
         return device_type in sensor_types
 
-    def send_daily_report(self, date_str=None):
+    def send_graph_report(self):
         """
-        Send daily report for all sensor devices.
-
-        Args:
-            date_str: Date to report (YYYY-MM-DD), defaults to today
+        Send graph report for all sensor devices to #atmos-graph channel.
+        Shows data from today midnight to now.
         """
-        if date_str is None:
-            # Default to today (report shows data from midnight to now)
-            date_str = datetime.now().strftime('%Y-%m-%d')
-
-        logging.info("Generating daily report for %s...", date_str)
+        date_str = datetime.now().strftime('%Y-%m-%d')
+        logging.info("Generating graph report for %s...", date_str)
 
         # Get all sensor devices
         sensor_devices = self.db.get_all_sensor_devices()
 
         if not sensor_devices:
-            logging.info("No sensor data available for report")
+            logging.info("No sensor data available for graph report")
             return
+
+        # Collect all sensor data for combined chart
+        all_sensor_data = []
+        devices_summary = []
 
         for device in sensor_devices:
             device_id = device['device_id']
             device_name = device['device_name']
 
             try:
-                # Get daily data and summary
+                # Get today's data
                 sensor_data = self.db.get_sensor_data_for_date(device_id, date_str)
-                summary = self.db.get_daily_summary(device_id, date_str)
 
                 if not sensor_data:
                     logging.debug("No data for %s on %s", device_name, date_str)
                     continue
 
-                # Generate charts
-                chart_urls = self.chart_generator.generate_sensor_chart(
-                    sensor_data, device_name, date_str, use_short_url=True
-                )
+                all_sensor_data.append({
+                    'device_name': device_name,
+                    'data': sensor_data
+                })
 
-                # Send report to Slack
-                self.slack.notify_daily_report(
-                    device_name, date_str, summary, chart_urls
-                )
-
-                logging.info("Sent daily report for %s", device_name)
+                # Get latest values for summary
+                latest = sensor_data[-1] if sensor_data else {}
+                devices_summary.append({
+                    'device_name': device_name,
+                    'temperature': {'latest': latest.get('temperature', '-')},
+                    'humidity': {'latest': latest.get('humidity', '-')},
+                    'co2': {'latest': latest.get('co2', '-')}
+                })
 
             except Exception as e:
-                logging.error("Error generating report for %s: %s", device_name, e)
+                logging.error("Error getting data for %s: %s", device_name, e)
 
-    def check_daily_report(self):
-        """Check if it's time to send daily report (at configured hour)."""
-        report_config = self.config.get('daily_report', {})
+        if not all_sensor_data:
+            logging.info("No sensor data collected for graph report")
+            return
+
+        # Generate combined chart (use first device's data for now, or implement multi-device chart)
+        chart_urls = {}
+        try:
+            # Use the first device's data for chart generation
+            first_device = all_sensor_data[0]
+            chart_urls = self.chart_generator.generate_sensor_chart(
+                first_device['data'],
+                first_device['device_name'],
+                date_str,
+                use_short_url=True
+            )
+        except Exception as e:
+            logging.error("Error generating chart: %s", e)
+
+        # Send to Slack #atmos-graph channel
+        try:
+            self.slack.notify_atmos_graph(date_str, devices_summary, chart_urls)
+            logging.info("Sent graph report to #atmos-graph")
+        except Exception as e:
+            logging.error("Error sending graph report: %s", e)
+
+    def check_graph_report(self):
+        """Check if it's time to send graph report (every N minutes)."""
+        report_config = self.config.get('graph_report', {})
         if not report_config.get('enabled', False):
             return
 
-        report_hour = report_config.get('hour', 8)  # Default 8 AM
-        now = datetime.now()
+        interval_minutes = report_config.get('interval_minutes', 5)
+        interval_seconds = interval_minutes * 60
 
-        # Check if it's the right hour and we haven't sent today
-        today = now.strftime('%Y-%m-%d')
-        if now.hour == report_hour and self.last_report_date != today:
-            # Send report for yesterday
-            self.send_daily_report()
-            self.last_report_date = today
+        now = time.time()
+        if now - self.last_graph_report >= interval_seconds:
+            self.send_graph_report()
+            self.last_graph_report = now
 
     def run(self):
         """Main monitoring loop."""
@@ -469,8 +503,15 @@ class SwitchBotMonitor:
         interval = self.config.get('monitor', {}).get('interval_seconds', 1800)
         logging.info("Polling interval: %d seconds", interval)
 
+        # Get graph report interval
+        graph_interval = self.config.get('graph_report', {}).get('interval_minutes', 5)
+        logging.info("Graph report interval: %d minutes", graph_interval)
+
         # Initial poll
         self.poll_devices()
+
+        # Initialize graph report timer
+        self.last_graph_report = time.time()
 
         # Main loop
         last_poll = time.time()
@@ -481,8 +522,8 @@ class SwitchBotMonitor:
                 self.poll_devices()
                 last_poll = now
 
-            # Check for daily report
-            self.check_daily_report()
+            # Check for graph report (every 5 minutes)
+            self.check_graph_report()
 
             # Sleep briefly
             time.sleep(1)

@@ -2,6 +2,7 @@
 """
 Slack notification module using Incoming Webhooks.
 Python 3.7+ compatible, requires only requests library.
+Supports multiple channels for different notification types.
 """
 import json
 import requests
@@ -11,22 +12,44 @@ from datetime import datetime
 class SlackNotifier:
     """Send notifications to Slack via Incoming Webhooks."""
 
-    def __init__(self, webhook_url, enabled=True):
+    # Security device types
+    SECURITY_DEVICE_TYPES = [
+        'Smart Lock', 'Smart Lock Pro', 'Lock',
+        'Contact Sensor', 'Motion Sensor',
+        'Keypad', 'Keypad Touch',
+        'Video Doorbell'
+    ]
+
+    # Atmosphere sensor device types
+    ATMOS_DEVICE_TYPES = [
+        'Meter', 'MeterPlus', 'MeterPro', 'MeterPro(CO2)',
+        'WoIOSensor', 'Hub 2', 'Outdoor Meter'
+    ]
+
+    def __init__(self, config):
         """
-        Initialize Slack notifier.
+        Initialize Slack notifier with channel configuration.
 
         Args:
-            webhook_url: Slack Incoming Webhook URL
-            enabled: Whether notifications are enabled
+            config: Slack config dict with 'channels' and other settings
         """
-        self.webhook_url = webhook_url
-        self.enabled = enabled
+        self.enabled = config.get('enabled', True)
+        self.channels = config.get('channels', {})
 
-    def send_message(self, text, blocks=None):
+        # Backwards compatibility: if 'webhook_url' is provided, use for all
+        if 'webhook_url' in config and not self.channels:
+            self.channels = {
+                'home_security': config['webhook_url'],
+                'atmos_update': config['webhook_url'],
+                'atmos_graph': config['webhook_url']
+            }
+
+    def _send_to_channel(self, channel, text, blocks=None):
         """
-        Send a message to Slack.
+        Send a message to a specific Slack channel.
 
         Args:
+            channel: Channel key ('home_security', 'atmos_update', 'atmos_graph')
             text: Plain text message (fallback for notifications)
             blocks: Optional Block Kit blocks for rich formatting
 
@@ -36,8 +59,9 @@ class SlackNotifier:
         if not self.enabled:
             return True
 
-        if not self.webhook_url:
-            print("[Slack] Webhook URL not configured, skipping notification")
+        webhook_url = self.channels.get(channel)
+        if not webhook_url:
+            print("[Slack] No webhook URL configured for channel: {}".format(channel))
             return False
 
         payload = {'text': text}
@@ -46,7 +70,7 @@ class SlackNotifier:
 
         try:
             response = requests.post(
-                self.webhook_url,
+                webhook_url,
                 json=payload,
                 headers={'Content-Type': 'application/json'},
                 timeout=10
@@ -54,339 +78,226 @@ class SlackNotifier:
             response.raise_for_status()
             return True
         except requests.exceptions.RequestException as e:
-            print("[Slack] Failed to send notification: {}".format(e))
+            print("[Slack] Failed to send to {}: {}".format(channel, e))
             return False
 
-    def notify_device_change(self, device_name, device_type, changes, status):
+    def get_device_category(self, device_type):
         """
-        Send notification about device state change.
+        Determine device category based on type.
 
         Args:
-            device_name: Name of the device
-            device_type: Type of the device
-            changes: List of change dicts
-            status: Current device status
+            device_type: SwitchBot device type string
 
         Returns:
-            bool: True if sent successfully
+            str: 'security', 'atmos', or 'other'
         """
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        if device_type in self.SECURITY_DEVICE_TYPES:
+            return 'security'
+        elif device_type in self.ATMOS_DEVICE_TYPES:
+            return 'atmos'
+        return 'other'
 
-        # Build change text
-        change_lines = []
-        for change in changes:
-            change_lines.append("  - {}".format(change['message']))
-
-        change_text = '\n'.join(change_lines) if change_lines else "  (Initial state recorded)"
-
-        # Plain text fallback
-        text = "[SwitchBot] {} ({}) state changed:\n{}".format(
-            device_name, device_type, change_text
-        )
-
-        # Rich Block Kit format
-        blocks = [
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": "SwitchBot Device Update",
-                    "emoji": True
-                }
-            },
-            {
-                "type": "section",
-                "fields": [
-                    {
-                        "type": "mrkdwn",
-                        "text": "*Device:*\n{}".format(device_name)
-                    },
-                    {
-                        "type": "mrkdwn",
-                        "text": "*Type:*\n{}".format(device_type)
-                    }
-                ]
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Changes:*\n```{}```".format(change_text)
-                }
-            },
-            {
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "mrkdwn",
-                        "text": "Updated at: {}".format(timestamp)
-                    }
-                ]
-            },
-            {
-                "type": "divider"
-            }
-        ]
-
-        # Add current status summary for common device types
-        status_text = self._format_status_summary(device_type, status)
-        if status_text:
-            blocks.insert(-1, {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Current Status:*\n{}".format(status_text)
-                }
-            })
-
-        return self.send_message(text, blocks)
-
-    def _format_status_summary(self, device_type, status):
+    def _get_security_message_ja(self, device_name, device_type, status):
         """
-        Format status summary based on device type.
-
-        Args:
-            device_type: Type of device
-            status: Status dict
-
-        Returns:
-            str: Formatted status text
-        """
-        if not status:
-            return None
-
-        summaries = []
-
-        # Temperature/Humidity sensors (Meter, MeterPlus, WoIOSensor, Hub2)
-        if 'temperature' in status:
-            temp = status.get('temperature')
-            summaries.append("Temperature: {}C".format(temp))
-
-        if 'humidity' in status:
-            humidity = status.get('humidity')
-            summaries.append("Humidity: {}%".format(humidity))
-
-        # CO2 sensor
-        if 'CO2' in status:
-            co2 = status.get('CO2')
-            summaries.append("CO2: {}ppm".format(co2))
-
-        # Battery level
-        if 'battery' in status:
-            battery = status.get('battery')
-            summaries.append("Battery: {}%".format(battery))
-
-        # Bot (switch)
-        if 'power' in status:
-            power = status.get('power')
-            summaries.append("Power: {}".format(power))
-
-        # Curtain
-        if 'slidePosition' in status:
-            pos = status.get('slidePosition')
-            summaries.append("Position: {}%".format(pos))
-
-        # Plug
-        if 'voltage' in status:
-            voltage = status.get('voltage')
-            summaries.append("Voltage: {}V".format(voltage))
-
-        if 'weight' in status:
-            weight = status.get('weight')
-            summaries.append("Power: {}W".format(weight))
-
-        # Motion/Contact sensors
-        if 'moveDetected' in status:
-            detected = "Yes" if status.get('moveDetected') else "No"
-            summaries.append("Motion: {}".format(detected))
-
-        if 'openState' in status:
-            state = status.get('openState')
-            summaries.append("Door: {}".format(state))
-
-        # Lock
-        if 'lockState' in status:
-            lock_state = status.get('lockState')
-            summaries.append("Lock: {}".format(lock_state))
-
-        if 'doorState' in status:
-            door_state = status.get('doorState')
-            summaries.append("Door: {}".format(door_state))
-
-        if summaries:
-            return '\n'.join(['- {}'.format(s) for s in summaries])
-        return None
-
-    def notify_error(self, error_message, device_name=None):
-        """
-        Send error notification.
-
-        Args:
-            error_message: Error description
-            device_name: Optional device name if error is device-specific
-
-        Returns:
-            bool: True if sent successfully
-        """
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-        if device_name:
-            text = "[SwitchBot Error] {}: {}".format(device_name, error_message)
-        else:
-            text = "[SwitchBot Error] {}".format(error_message)
-
-        blocks = [
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": "SwitchBot Monitor Error",
-                    "emoji": True
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Error:*\n```{}```".format(error_message)
-                }
-            },
-            {
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "mrkdwn",
-                        "text": "Time: {}".format(timestamp)
-                    }
-                ]
-            }
-        ]
-
-        if device_name:
-            blocks.insert(1, {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Device:* {}".format(device_name)
-                }
-            })
-
-        return self.send_message(text, blocks)
-
-    def notify_startup(self, device_count):
-        """
-        Send startup notification.
-
-        Args:
-            device_count: Number of devices being monitored
-
-        Returns:
-            bool: True if sent successfully
-        """
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-        text = "[SwitchBot Monitor] Started monitoring {} devices".format(device_count)
-
-        blocks = [
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": "SwitchBot Monitor Started",
-                    "emoji": True
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "Now monitoring *{}* devices".format(device_count)
-                }
-            },
-            {
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "mrkdwn",
-                        "text": "Started at: {}".format(timestamp)
-                    }
-                ]
-            }
-        ]
-
-        return self.send_message(text, blocks)
-
-    def notify_daily_report(self, device_name, date_str, summary, chart_urls=None):
-        """
-        Send daily sensor report with charts.
+        Generate Japanese security notification message.
 
         Args:
             device_name: Device name
-            date_str: Date string (YYYY-MM-DD)
-            summary: Daily summary dict from database
-            chart_urls: Dict of chart URLs {name: url}
+            device_type: Device type
+            status: Current status dict
+
+        Returns:
+            str: Japanese message
+        """
+        # Lock devices
+        if device_type in ['Smart Lock', 'Smart Lock Pro', 'Lock']:
+            lock_state = status.get('lockState', '')
+            if lock_state == 'locked':
+                return "{}が施錠されました".format(device_name)
+            elif lock_state == 'unlocked':
+                return "{}が解錠されました".format(device_name)
+            elif lock_state == 'jammed':
+                return "{}がジャム（詰まり）状態です！".format(device_name)
+            else:
+                return "{}の状態が変わりました: {}".format(device_name, lock_state)
+
+        # Contact Sensor (door/window open/close)
+        if device_type == 'Contact Sensor':
+            open_state = status.get('openState', '')
+            if open_state == 'open':
+                return "{}が開きました".format(device_name)
+            elif open_state == 'close':
+                return "{}が閉まりました".format(device_name)
+            elif open_state == 'timeOutNotClose':
+                return "{}が長時間開いたままです！".format(device_name)
+            else:
+                return "{}の状態: {}".format(device_name, open_state)
+
+        # Motion Sensor
+        if device_type == 'Motion Sensor':
+            detected = status.get('moveDetected', False)
+            if detected:
+                return "{}が動きを検知しました".format(device_name)
+            else:
+                return "{}の動き検知がクリアされました".format(device_name)
+
+        # Video Doorbell
+        if device_type == 'Video Doorbell':
+            return "{}が押されました".format(device_name)
+
+        # Default
+        return "{}の状態が変わりました".format(device_name)
+
+    def notify_security_event(self, device_name, device_type, status):
+        """
+        Send security event notification to #home-security channel.
+
+        Args:
+            device_name: Device name
+            device_type: Device type
+            status: Current status dict
+
+        Returns:
+            bool: True if sent successfully
+        """
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        message_ja = self._get_security_message_ja(device_name, device_type, status)
+
+        # Determine emoji based on event type
+        emoji = ""
+        if 'Lock' in device_type:
+            lock_state = status.get('lockState', '')
+            emoji = "" if lock_state == 'locked' else ""
+        elif device_type == 'Contact Sensor':
+            open_state = status.get('openState', '')
+            emoji = "" if open_state == 'open' else ""
+        elif device_type == 'Motion Sensor':
+            emoji = ""
+        elif device_type == 'Video Doorbell':
+            emoji = ""
+
+        text = "{} {}".format(emoji, message_ja)
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*{} {}*".format(emoji, message_ja)
+                }
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "{} | {}".format(device_type, timestamp)
+                    }
+                ]
+            }
+        ]
+
+        return self._send_to_channel('home_security', text, blocks)
+
+    def notify_atmos_update(self, device_name, device_type, status):
+        """
+        Send atmosphere sensor update to #atmos-update channel.
+
+        Args:
+            device_name: Device name
+            device_type: Device type
+            status: Current status dict
 
         Returns:
             bool: True if sent successfully
         """
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        # Build summary text
+        # Build status summary
+        summaries = []
+        if 'temperature' in status:
+            summaries.append("{}°C".format(status['temperature']))
+        if 'humidity' in status:
+            summaries.append("{}%".format(status['humidity']))
+        if 'CO2' in status:
+            summaries.append("{}ppm".format(status['CO2']))
+
+        status_text = " / ".join(summaries) if summaries else "No data"
+        text = "[{}] {}".format(device_name, status_text)
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*{}*\n{}".format(device_name, status_text)
+                }
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "{} | {}".format(device_type, timestamp)
+                    }
+                ]
+            }
+        ]
+
+        return self._send_to_channel('atmos_update', text, blocks)
+
+    def notify_atmos_graph(self, date_str, devices_data, chart_urls):
+        """
+        Send atmosphere graph to #atmos-graph channel.
+
+        Args:
+            date_str: Date string (YYYY-MM-DD)
+            devices_data: List of device summary dicts
+            chart_urls: Dict of chart URLs
+
+        Returns:
+            bool: True if sent successfully
+        """
+        timestamp = datetime.now().strftime('%H:%M')
+
+        # Build summary table
         summary_lines = []
-        if summary:
-            if summary.get('temperature', {}).get('avg') is not None:
-                t = summary['temperature']
-                summary_lines.append("Temperature: {}C (min: {}C, max: {}C)".format(
-                    t['avg'], t['min'], t['max']
-                ))
+        for device in devices_data:
+            name = device.get('device_name', 'Unknown')
+            temp = device.get('temperature', {}).get('latest', '-')
+            humidity = device.get('humidity', {}).get('latest', '-')
+            co2 = device.get('co2', {}).get('latest', '-')
 
-            if summary.get('humidity', {}).get('avg') is not None:
-                h = summary['humidity']
-                summary_lines.append("Humidity: {}% (min: {}%, max: {}%)".format(
-                    h['avg'], h['min'], h['max']
-                ))
+            if temp != '-' or humidity != '-' or co2 != '-':
+                line = "*{}*: ".format(name)
+                parts = []
+                if temp != '-':
+                    parts.append("{}°C".format(temp))
+                if humidity != '-':
+                    parts.append("{}%".format(humidity))
+                if co2 != '-':
+                    parts.append("{}ppm".format(co2))
+                line += " / ".join(parts)
+                summary_lines.append(line)
 
-            if summary.get('co2', {}).get('avg') is not None:
-                c = summary['co2']
-                summary_lines.append("CO2: {}ppm (min: {}ppm, max: {}ppm)".format(
-                    c['avg'], c['min'], c['max']
-                ))
+        summary_text = "\n".join(summary_lines) if summary_lines else "No data"
 
-        summary_text = '\n'.join(summary_lines) if summary_lines else "No data"
+        text = "Atmosphere Report ({} {})".format(date_str, timestamp)
 
-        # Plain text fallback
-        text = "[SwitchBot] Daily Report - {} ({})\n{}".format(
-            device_name, date_str, summary_text
-        )
-
-        # Rich Block Kit format
         blocks = [
             {
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": "Daily Sensor Report",
+                    "text": "環境センサーレポート ({})".format(timestamp),
                     "emoji": True
                 }
             },
             {
                 "type": "section",
-                "fields": [
-                    {
-                        "type": "mrkdwn",
-                        "text": "*Device:*\n{}".format(device_name)
-                    },
-                    {
-                        "type": "mrkdwn",
-                        "text": "*Date:*\n{}".format(date_str)
-                    }
-                ]
-            },
-            {
-                "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "*Summary:*\n```{}```".format(summary_text)
+                    "text": summary_text
                 }
             }
         ]
@@ -395,10 +306,9 @@ class SlackNotifier:
         if chart_urls:
             for chart_name, url in chart_urls.items():
                 if url:
-                    # Use image block for charts
                     chart_title = {
-                        'temp_humidity': 'Temperature & Humidity',
-                        'co2': 'CO2 Level'
+                        'temp_humidity': '温度・湿度',
+                        'co2': 'CO2濃度'
                     }.get(chart_name, chart_name)
 
                     blocks.append({
@@ -416,98 +326,110 @@ class SlackNotifier:
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": "Generated at: {}".format(timestamp)
+                    "text": "{}".format(date_str)
                 }
             ]
         })
 
-        return self.send_message(text, blocks)
+        return self._send_to_channel('atmos_graph', text, blocks)
 
-    def notify_multi_device_report(self, date_str, devices_summary, chart_url=None):
+    def notify_startup(self, device_count, channel='home_security'):
         """
-        Send report comparing multiple devices.
+        Send startup notification.
 
         Args:
-            date_str: Date string
-            devices_summary: Dict of {device_name: summary}
-            chart_url: Comparison chart URL
+            device_count: Number of devices being monitored
+            channel: Channel to send to
 
         Returns:
             bool: True if sent successfully
         """
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        # Build comparison table
-        table_lines = []
-        for device_name, summary in devices_summary.items():
-            if summary:
-                temp = summary.get('temperature', {}).get('avg', '-')
-                humidity = summary.get('humidity', {}).get('avg', '-')
-                co2 = summary.get('co2', {}).get('avg', '-')
-                table_lines.append("{}: {}C / {}% / {}ppm".format(
-                    device_name, temp, humidity, co2
-                ))
-
-        table_text = '\n'.join(table_lines) if table_lines else "No data"
-
-        text = "[SwitchBot] Multi-Device Report ({})\n{}".format(date_str, table_text)
+        text = "[SwitchBot Monitor] Started monitoring {} devices".format(device_count)
 
         blocks = [
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": "Multi-Device Sensor Report",
-                    "emoji": True
-                }
-            },
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "*Date:* {}\n*Devices (Temp / Humidity / CO2):*\n```{}```".format(
-                        date_str, table_text
-                    )
+                    "text": "*SwitchBot Monitor Started*\nMonitoring {} devices".format(device_count)
                 }
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "Started at: {}".format(timestamp)
+                    }
+                ]
             }
         ]
 
-        if chart_url:
-            blocks.append({
-                "type": "image",
-                "title": {
-                    "type": "plain_text",
-                    "text": "Comparison Chart"
-                },
-                "image_url": chart_url,
-                "alt_text": "Multi-device comparison chart"
-            })
+        return self._send_to_channel(channel, text, blocks)
 
-        blocks.append({
-            "type": "context",
-            "elements": [
-                {
+    def notify_error(self, error_message, device_name=None, channel='home_security'):
+        """
+        Send error notification.
+
+        Args:
+            error_message: Error description
+            device_name: Optional device name if error is device-specific
+            channel: Channel to send to
+
+        Returns:
+            bool: True if sent successfully
+        """
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        if device_name:
+            text = "[Error] {}: {}".format(device_name, error_message)
+        else:
+            text = "[Error] {}".format(error_message)
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
                     "type": "mrkdwn",
-                    "text": "Generated at: {}".format(timestamp)
+                    "text": "*Error*\n```{}```".format(error_message)
                 }
-            ]
-        })
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "Time: {}".format(timestamp)
+                    }
+                ]
+            }
+        ]
 
-        return self.send_message(text, blocks)
+        if device_name:
+            blocks[0]['text']['text'] = "*Error* ({})\n```{}```".format(device_name, error_message)
+
+        return self._send_to_channel(channel, text, blocks)
 
 
 if __name__ == '__main__':
     # Simple test (won't actually send without valid webhook)
-    notifier = SlackNotifier("https://hooks.slack.com/services/xxx", enabled=False)
+    config = {
+        'enabled': False,
+        'channels': {
+            'home_security': 'https://hooks.slack.com/services/xxx',
+            'atmos_update': 'https://hooks.slack.com/services/xxx',
+            'atmos_graph': 'https://hooks.slack.com/services/xxx'
+        }
+    }
+    notifier = SlackNotifier(config)
 
-    # Test change notification formatting
-    changes = [
-        {'field': 'temperature', 'old_value': 25.0, 'new_value': 26.0, 'message': 'temperature: 25.0 -> 26.0'},
-        {'field': 'humidity', 'old_value': 60, 'new_value': 58, 'message': 'humidity: 60 -> 58'}
-    ]
-    status = {'temperature': 26.0, 'humidity': 58, 'battery': 90}
+    print("Test: Security message")
+    msg = notifier._get_security_message_ja("ロックPro 24", "Smart Lock Pro", {"lockState": "unlocked"})
+    print("  -> {}".format(msg))
 
-    print("Test notification format would be sent for device change")
-    print("Changes: {}".format(changes))
-    print("Status: {}".format(status))
+    msg = notifier._get_security_message_ja("開閉センサー", "Contact Sensor", {"openState": "open"})
+    print("  -> {}".format(msg))
+
     print("Test completed!")

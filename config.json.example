@@ -4,7 +4,11 @@
         "secret": "YOUR_SWITCHBOT_API_SECRET"
     },
     "slack": {
-        "webhook_url": "https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
+        "channels": {
+            "home_security": "https://hooks.slack.com/services/YOUR/SECURITY/WEBHOOK",
+            "atmos_update": "https://hooks.slack.com/services/YOUR/ATMOS/WEBHOOK",
+            "atmos_graph": "https://hooks.slack.com/services/YOUR/GRAPH/WEBHOOK"
+        },
         "enabled": true,
         "notify_startup": true,
         "notify_errors": true
@@ -47,9 +51,9 @@
         "history_days": 30,
         "sensor_data_days": 7
     },
-    "daily_report": {
+    "graph_report": {
         "enabled": true,
-        "hour": 8
+        "interval_minutes": 5
     },
     "logging": {
         "level": "INFO",
