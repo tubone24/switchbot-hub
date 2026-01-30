@@ -15,6 +15,7 @@ import logging
 from datetime import datetime
 
 from switchbot_api import SwitchBotAPI
+from netatmo_api import NetatmoAPI
 from database import DeviceDatabase
 from slack_notifier import SlackNotifier
 from webhook_server import WebhookServer, parse_webhook_event
@@ -127,12 +128,27 @@ class SwitchBotMonitor:
         """Initialize monitor with configuration."""
         self.config = config
 
-        # Initialize API
+        # Initialize SwitchBot API
         switchbot_config = config['switchbot']
         self.api = SwitchBotAPI(
             token=switchbot_config['token'],
             secret=switchbot_config['secret']
         )
+
+        # Initialize Netatmo API (optional)
+        self.netatmo_api = None
+        netatmo_config = config.get('netatmo', {})
+        if netatmo_config.get('enabled', False):
+            try:
+                self.netatmo_api = NetatmoAPI(
+                    client_id=netatmo_config['client_id'],
+                    client_secret=netatmo_config['client_secret'],
+                    refresh_token=netatmo_config['refresh_token'],
+                    credentials_file=netatmo_config.get('credentials_file')
+                )
+                logging.info("Netatmo API initialized")
+            except Exception as e:
+                logging.error("Failed to initialize Netatmo API: %s", e)
 
         # Initialize database
         db_path = config.get('database', {}).get('path', 'device_states.db')
@@ -155,6 +171,9 @@ class SwitchBotMonitor:
 
         # Graph report tracking (5-minute interval)
         self.last_graph_report = 0
+
+        # Netatmo polling tracking (separate interval)
+        self.last_netatmo_poll = 0
 
     def setup_webhook_server(self):
         """Setup webhook server and Cloudflare tunnel."""
@@ -372,6 +391,79 @@ class SwitchBotMonitor:
                 if self.config.get('slack', {}).get('notify_errors', False):
                     self.slack.notify_error(str(e), device_name)
 
+    def poll_netatmo(self):
+        """Poll Netatmo weather station for sensor data."""
+        if not self.netatmo_api:
+            return
+
+        logging.info("Polling Netatmo weather station...")
+
+        try:
+            readings = self.netatmo_api.get_all_sensor_readings()
+
+            for reading in readings:
+                device_id = reading['device_id']
+                device_name = reading['device_name']
+                station_name = reading.get('station_name', '')
+                module_type = reading.get('module_type', '')
+                is_outdoor = reading.get('is_outdoor', False)
+
+                # Save to database
+                saved = self.db.save_netatmo_data(
+                    device_id=device_id,
+                    device_name=device_name,
+                    station_name=station_name,
+                    module_type=module_type,
+                    is_outdoor=is_outdoor,
+                    temperature=reading.get('temperature'),
+                    humidity=reading.get('humidity'),
+                    co2=reading.get('co2'),
+                    pressure=reading.get('pressure'),
+                    noise=reading.get('noise'),
+                    wind_strength=reading.get('wind_strength'),
+                    wind_angle=reading.get('wind_angle'),
+                    gust_strength=reading.get('gust_strength'),
+                    gust_angle=reading.get('gust_angle'),
+                    rain=reading.get('rain'),
+                    rain_1h=reading.get('rain_1h'),
+                    rain_24h=reading.get('rain_24h'),
+                    battery_percent=reading.get('battery_percent')
+                )
+
+                if saved:
+                    location = "屋外" if is_outdoor else "屋内"
+                    parts = []
+                    if reading.get('temperature') is not None:
+                        parts.append("temp={:.1f}".format(reading['temperature']))
+                    if reading.get('humidity') is not None:
+                        parts.append("humidity={}".format(reading['humidity']))
+                    if reading.get('co2') is not None:
+                        parts.append("CO2={}".format(reading['co2']))
+                    if reading.get('pressure') is not None:
+                        parts.append("pressure={:.1f}".format(reading['pressure']))
+                    if reading.get('noise') is not None:
+                        parts.append("noise={}".format(reading['noise']))
+                    if reading.get('wind_strength') is not None:
+                        parts.append("wind={}km/h".format(reading['wind_strength']))
+                    if reading.get('gust_strength') is not None:
+                        parts.append("gust={}km/h".format(reading['gust_strength']))
+                    if reading.get('rain') is not None:
+                        parts.append("rain={}mm".format(reading['rain']))
+                    if reading.get('rain_24h') is not None:
+                        parts.append("rain24h={}mm".format(reading['rain_24h']))
+
+                    logging.info(
+                        "[Netatmo] %s (%s/%s): %s",
+                        device_name, station_name, location, ", ".join(parts)
+                    )
+
+            logging.info("Netatmo polling complete: %d readings", len(readings))
+
+        except Exception as e:
+            logging.error("Error polling Netatmo: %s", e)
+            if self.config.get('slack', {}).get('notify_errors', False):
+                self.slack.notify_error("Netatmo: {}".format(str(e)))
+
     def _is_sensor_device(self, device_type):
         """Check if device type is a sensor that records time series data."""
         sensor_types = [
@@ -393,22 +485,25 @@ class SwitchBotMonitor:
         Send graph report for all sensor devices to #atmos-graph channel.
         Shows data from today midnight to now.
         Separates outdoor and indoor sensors.
+        Includes both SwitchBot and Netatmo sensors.
         """
         date_str = datetime.now().strftime('%Y-%m-%d')
         logging.info("Generating graph report for %s...", date_str)
 
-        # Get all sensor devices
+        # Get all SwitchBot sensor devices
         sensor_devices = self.db.get_all_sensor_devices()
-
-        if not sensor_devices:
-            logging.info("No sensor data available for graph report")
-            return
 
         # Separate outdoor and indoor sensor data
         outdoor_data = {}  # {device_name: sensor_data_list}
         indoor_data = {}   # {device_name: sensor_data_list}
+        # Netatmo-specific data
+        wind_data = {}     # {device_name: sensor_data_list} for wind sensors
+        rain_data = {}     # {device_name: sensor_data_list} for rain sensors
+        pressure_data = {} # {device_name: sensor_data_list} for pressure (indoor only)
+        noise_data = {}    # {device_name: sensor_data_list} for noise (indoor only)
         devices_summary = []
 
+        # Process SwitchBot sensors
         for device in sensor_devices:
             device_id = device['device_id']
             device_name = device['device_name']
@@ -423,34 +518,99 @@ class SwitchBotMonitor:
 
                 # Separate outdoor vs indoor
                 if self._is_outdoor_sensor(device_name):
-                    outdoor_data[device_name] = sensor_data
+                    outdoor_data["[SB] " + device_name] = sensor_data
                 else:
-                    indoor_data[device_name] = sensor_data
+                    indoor_data["[SB] " + device_name] = sensor_data
 
                 # Get latest values for summary
                 latest = sensor_data[-1] if sensor_data else {}
                 is_outdoor = self._is_outdoor_sensor(device_name)
                 devices_summary.append({
-                    'device_name': device_name,
+                    'device_name': "[SB] " + device_name,
+                    'source': 'SwitchBot',
+                    'module_type': 'SwitchBot',
                     'temperature': {'latest': latest.get('temperature', '-')},
                     'humidity': {'latest': latest.get('humidity', '-')},
                     'co2': {'latest': latest.get('co2', '-')},
+                    'pressure': {'latest': '-'},
+                    'noise': {'latest': '-'},
+                    'wind_strength': {'latest': '-'},
+                    'rain_24h': {'latest': '-'},
                     'is_outdoor': is_outdoor
                 })
 
             except Exception as e:
-                logging.error("Error getting data for %s: %s", device_name, e)
+                logging.error("Error getting SwitchBot data for %s: %s", device_name, e)
 
-        if not outdoor_data and not indoor_data:
+        # Process Netatmo sensors
+        if self.netatmo_api:
+            netatmo_devices = self.db.get_all_netatmo_devices()
+
+            for device in netatmo_devices:
+                device_id = device['device_id']
+                device_name = device['device_name']
+                module_type = device.get('module_type', '')
+                is_outdoor = device.get('is_outdoor', False)
+
+                try:
+                    # Get today's data
+                    sensor_data = self.db.get_netatmo_data_for_date(device_id, date_str)
+
+                    if not sensor_data:
+                        logging.debug("No Netatmo data for %s on %s", device_name, date_str)
+                        continue
+
+                    display_name = "[NA] " + device_name
+
+                    # Categorize by module type
+                    if module_type == 'NAModule2':
+                        # Wind sensor
+                        wind_data[display_name] = sensor_data
+                    elif module_type == 'NAModule3':
+                        # Rain sensor
+                        rain_data[display_name] = sensor_data
+                    elif is_outdoor:
+                        # Outdoor temperature/humidity (NAModule1)
+                        outdoor_data[display_name] = sensor_data
+                    else:
+                        # Indoor (NAMain, NAModule4)
+                        indoor_data[display_name] = sensor_data
+                        # Pressure and noise from main station
+                        if module_type == 'NAMain':
+                            pressure_data[display_name] = sensor_data
+                            noise_data[display_name] = sensor_data
+
+                    # Get latest values for summary
+                    latest = sensor_data[-1] if sensor_data else {}
+                    devices_summary.append({
+                        'device_name': display_name,
+                        'source': 'Netatmo',
+                        'module_type': module_type,
+                        'temperature': {'latest': latest.get('temperature', '-')},
+                        'humidity': {'latest': latest.get('humidity', '-')},
+                        'co2': {'latest': latest.get('co2', '-')},
+                        'pressure': {'latest': latest.get('pressure', '-')},
+                        'noise': {'latest': latest.get('noise', '-')},
+                        'wind_strength': {'latest': latest.get('wind_strength', '-')},
+                        'gust_strength': {'latest': latest.get('gust_strength', '-')},
+                        'rain': {'latest': latest.get('rain', '-')},
+                        'rain_24h': {'latest': latest.get('rain_24h', '-')},
+                        'is_outdoor': is_outdoor
+                    })
+
+                except Exception as e:
+                    logging.error("Error getting Netatmo data for %s: %s", device_name, e)
+
+        if not outdoor_data and not indoor_data and not wind_data and not rain_data:
             logging.info("No sensor data collected for graph report")
             return
 
-        # Generate charts (5 total: outdoor temp/humidity, indoor temp/humidity, CO2)
+        # Generate charts
         # Get interval for downsampling from config
         interval_seconds = self.config.get('monitor', {}).get('interval_seconds', 1800)
         chart_urls = {}
         try:
-            # Outdoor charts
+            # Outdoor charts (temperature, humidity)
             if outdoor_data:
                 chart_urls['outdoor_temp'] = self.chart_generator.generate_multi_device_chart(
                     outdoor_data, 'temperature', date_str, use_short_url=True,
@@ -462,7 +622,7 @@ class SwitchBotMonitor:
                 )
                 logging.debug("Generated outdoor charts")
 
-            # Indoor charts
+            # Indoor charts (temperature, humidity, CO2)
             if indoor_data:
                 chart_urls['indoor_temp'] = self.chart_generator.generate_multi_device_chart(
                     indoor_data, 'temperature', date_str, use_short_url=True,
@@ -477,6 +637,46 @@ class SwitchBotMonitor:
                     interval_seconds=interval_seconds
                 )
                 logging.debug("Generated indoor charts")
+
+            # Pressure chart (Netatmo main station only)
+            if pressure_data:
+                chart_urls['pressure'] = self.chart_generator.generate_multi_device_chart(
+                    pressure_data, 'pressure', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
+                )
+                logging.debug("Generated pressure chart")
+
+            # Noise chart (Netatmo main station only)
+            if noise_data:
+                chart_urls['noise'] = self.chart_generator.generate_multi_device_chart(
+                    noise_data, 'noise', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
+                )
+                logging.debug("Generated noise chart")
+
+            # Wind chart (Netatmo NAModule2)
+            if wind_data:
+                chart_urls['wind'] = self.chart_generator.generate_multi_device_chart(
+                    wind_data, 'wind_strength', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
+                )
+                chart_urls['gust'] = self.chart_generator.generate_multi_device_chart(
+                    wind_data, 'gust_strength', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
+                )
+                logging.debug("Generated wind charts")
+
+            # Rain chart (Netatmo NAModule3)
+            if rain_data:
+                chart_urls['rain'] = self.chart_generator.generate_multi_device_chart(
+                    rain_data, 'rain', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
+                )
+                chart_urls['rain_24h'] = self.chart_generator.generate_multi_device_chart(
+                    rain_data, 'rain_24h', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
+                )
+                logging.debug("Generated rain charts")
 
         except Exception as e:
             logging.error("Error generating chart: %s", e)
@@ -536,7 +736,12 @@ class SwitchBotMonitor:
 
         # Get polling interval
         interval = self.config.get('monitor', {}).get('interval_seconds', 1800)
-        logging.info("Polling interval: %d seconds", interval)
+        logging.info("SwitchBot polling interval: %d seconds", interval)
+
+        # Get Netatmo polling interval (default: 10 minutes)
+        netatmo_interval = self.config.get('netatmo', {}).get('interval_seconds', 600)
+        if self.netatmo_api:
+            logging.info("Netatmo polling interval: %d seconds", netatmo_interval)
 
         # Get graph report interval
         graph_interval = self.config.get('graph_report', {}).get('interval_minutes', 5)
@@ -545,17 +750,33 @@ class SwitchBotMonitor:
         # Initial poll
         self.poll_devices()
 
+        # Initial Netatmo poll
+        if self.netatmo_api:
+            self.poll_netatmo()
+            self.last_netatmo_poll = time.time()
+
+        # Send initial graph report immediately after first poll
+        if self.config.get('graph_report', {}).get('enabled', False):
+            logging.info("Sending initial graph report...")
+            self.send_graph_report()
+
         # Initialize graph report timer
         self.last_graph_report = time.time()
 
         # Main loop
         last_poll = time.time()
         while running:
-            # Check if it's time to poll
             now = time.time()
+
+            # Check if it's time to poll SwitchBot
             if now - last_poll >= interval:
                 self.poll_devices()
                 last_poll = now
+
+            # Check if it's time to poll Netatmo
+            if self.netatmo_api and now - self.last_netatmo_poll >= netatmo_interval:
+                self.poll_netatmo()
+                self.last_netatmo_poll = now
 
             # Check for graph report (every 5 minutes)
             self.check_graph_report()
@@ -585,12 +806,19 @@ class SwitchBotMonitor:
             if deleted > 0:
                 logging.info("Cleaned up %d old history records", deleted)
 
-        # Cleanup old sensor data
+        # Cleanup old sensor data (SwitchBot)
         sensor_days = self.config.get('database', {}).get('sensor_data_days', 7)
         if sensor_days > 0:
             deleted = self.db.cleanup_old_sensor_data(sensor_days)
             if deleted > 0:
-                logging.info("Cleaned up %d old sensor data records", deleted)
+                logging.info("Cleaned up %d old SwitchBot sensor data records", deleted)
+
+        # Cleanup old Netatmo data
+        netatmo_days = self.config.get('database', {}).get('netatmo_data_days', 7)
+        if netatmo_days > 0:
+            deleted = self.db.cleanup_old_netatmo_data(netatmo_days)
+            if deleted > 0:
+                logging.info("Cleaned up %d old Netatmo data records", deleted)
 
         logging.info("Shutdown complete")
 

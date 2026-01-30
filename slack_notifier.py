@@ -269,19 +269,54 @@ class SlackNotifier:
             temp = device.get('temperature', {}).get('latest', '-')
             humidity = device.get('humidity', {}).get('latest', '-')
             co2 = device.get('co2', {}).get('latest', '-')
+            pressure = device.get('pressure', {}).get('latest', '-')
+            noise = device.get('noise', {}).get('latest', '-')
             is_outdoor = device.get('is_outdoor', False)
 
-            if temp != '-' or humidity != '-' or co2 != '-':
+            # Get wind and rain data
+            wind_strength = device.get('wind_strength', {}).get('latest', '-')
+            gust_strength = device.get('gust_strength', {}).get('latest', '-')
+            rain = device.get('rain', {}).get('latest', '-')
+            rain_24h = device.get('rain_24h', {}).get('latest', '-')
+            module_type = device.get('module_type', '')
+
+            has_data = any([
+                temp != '-', humidity != '-', co2 != '-',
+                pressure != '-', noise != '-',
+                wind_strength != '-', rain != '-'
+            ])
+
+            if has_data:
                 parts = []
                 if temp != '-':
-                    parts.append("{}°C".format(temp))
+                    if isinstance(temp, (int, float)):
+                        parts.append("{:.1f}°C".format(temp))
+                    else:
+                        parts.append("{}°C".format(temp))
                 if humidity != '-':
                     parts.append("{}%".format(humidity))
                 if co2 != '-':
                     parts.append("{}ppm".format(co2))
+                if pressure != '-':
+                    if isinstance(pressure, (int, float)):
+                        parts.append("{:.1f}hPa".format(pressure))
+                    else:
+                        parts.append("{}hPa".format(pressure))
+                if noise != '-':
+                    parts.append("{}dB".format(noise))
+                if wind_strength != '-':
+                    wind_str = "{}km/h".format(wind_strength)
+                    if gust_strength != '-':
+                        wind_str += " (gust:{}km/h)".format(gust_strength)
+                    parts.append(wind_str)
+                if rain_24h != '-':
+                    parts.append("{}mm/24h".format(rain_24h))
+                elif rain != '-':
+                    parts.append("{}mm".format(rain))
+
                 line = "*{}*: {}".format(name, " / ".join(parts))
 
-                if is_outdoor:
+                if is_outdoor or module_type in ['NAModule2', 'NAModule3']:
                     outdoor_lines.append(line)
                 else:
                     indoor_lines.append(line)
@@ -322,12 +357,24 @@ class SlackNotifier:
             'indoor_temp': '🏠 屋内 温度',
             'indoor_humidity': '🏠 屋内 湿度',
             'co2': '🏠 CO2濃度',
+            'pressure': '🏠 気圧',
+            'noise': '🏠 騒音',
+            'wind': '🌬️ 風速',
+            'gust': '🌬️ 突風',
+            'rain': '🌧️ 雨量',
+            'rain_24h': '🌧️ 雨量 (24h累計)',
             # Legacy keys
             'temp_humidity': '温度',
         }
 
         # Add chart images in specific order
-        chart_order = ['outdoor_temp', 'outdoor_humidity', 'indoor_temp', 'indoor_humidity', 'co2']
+        chart_order = [
+            'outdoor_temp', 'outdoor_humidity',
+            'indoor_temp', 'indoor_humidity', 'co2',
+            'pressure', 'noise',
+            'wind', 'gust',
+            'rain', 'rain_24h'
+        ]
 
         if chart_urls:
             for chart_name in chart_order:

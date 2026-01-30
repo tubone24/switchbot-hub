@@ -82,8 +82,69 @@ class DeviceDatabase:
             ON sensor_timeseries(device_id, recorded_at)
         ''')
 
+        # Netatmo time series table (includes pressure, noise, wind, rain)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS netatmo_timeseries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                device_name TEXT,
+                station_name TEXT,
+                module_type TEXT,
+                is_outdoor INTEGER DEFAULT 0,
+                recorded_at TEXT NOT NULL,
+                temperature REAL,
+                humidity REAL,
+                co2 INTEGER,
+                pressure REAL,
+                noise INTEGER,
+                wind_strength INTEGER,
+                wind_angle INTEGER,
+                gust_strength INTEGER,
+                gust_angle INTEGER,
+                rain REAL,
+                rain_1h REAL,
+                rain_24h REAL,
+                battery_percent INTEGER
+            )
+        ''')
+
+        # Index for Netatmo time series queries
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_netatmo_timeseries_device_date
+            ON netatmo_timeseries(device_id, recorded_at)
+        ''')
+
+        # Migration: Add wind/rain columns to netatmo_timeseries if they don't exist
+        self._migrate_netatmo_columns(cursor)
+
         conn.commit()
         conn.close()
+
+    def _migrate_netatmo_columns(self, cursor):
+        """Add wind/rain columns to netatmo_timeseries if they don't exist."""
+        # Check existing columns
+        cursor.execute("PRAGMA table_info(netatmo_timeseries)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        # New columns to add
+        new_columns = [
+            ('wind_strength', 'INTEGER'),
+            ('wind_angle', 'INTEGER'),
+            ('gust_strength', 'INTEGER'),
+            ('gust_angle', 'INTEGER'),
+            ('rain', 'REAL'),
+            ('rain_1h', 'REAL'),
+            ('rain_24h', 'REAL'),
+        ]
+
+        for col_name, col_type in new_columns:
+            if col_name not in existing_columns:
+                try:
+                    cursor.execute(
+                        'ALTER TABLE netatmo_timeseries ADD COLUMN {} {}'.format(col_name, col_type)
+                    )
+                except Exception:
+                    pass  # Column might already exist
 
     def get_device_state(self, device_id):
         """
@@ -501,6 +562,189 @@ class DeviceDatabase:
 
         cursor.execute('''
             DELETE FROM sensor_timeseries
+            WHERE recorded_at < datetime('now', '-{} days')
+        '''.format(int(days)))
+
+        deleted = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        return deleted
+
+    # ========== Netatmo Time Series Methods ==========
+
+    def save_netatmo_data(self, device_id, device_name, station_name, module_type,
+                          is_outdoor, temperature=None, humidity=None, co2=None,
+                          pressure=None, noise=None, wind_strength=None, wind_angle=None,
+                          gust_strength=None, gust_angle=None, rain=None, rain_1h=None,
+                          rain_24h=None, battery_percent=None):
+        """
+        Save Netatmo sensor time series data.
+
+        Args:
+            device_id: Netatmo device/module ID (MAC address)
+            device_name: Device/module name
+            station_name: Station name
+            module_type: Module type (NAMain, NAModule1, etc.)
+            is_outdoor: Whether this is an outdoor module
+            temperature: Temperature in Celsius
+            humidity: Humidity percentage
+            co2: CO2 in ppm
+            pressure: Pressure in mbar
+            noise: Noise level in dB
+            wind_strength: Wind speed in km/h
+            wind_angle: Wind direction in degrees
+            gust_strength: Gust speed in km/h
+            gust_angle: Gust direction in degrees
+            rain: Current rain in mm
+            rain_1h: Rain in last hour in mm
+            rain_24h: Rain in last 24 hours in mm
+            battery_percent: Battery percentage
+
+        Returns:
+            bool: True if data was saved
+        """
+        # Only save if there's any sensor data
+        has_data = any([
+            temperature is not None, humidity is not None, co2 is not None,
+            pressure is not None, noise is not None,
+            wind_strength is not None, rain is not None
+        ])
+        if not has_data:
+            return False
+
+        now = datetime.utcnow().isoformat()
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            INSERT INTO netatmo_timeseries
+            (device_id, device_name, station_name, module_type, is_outdoor,
+             recorded_at, temperature, humidity, co2, pressure, noise,
+             wind_strength, wind_angle, gust_strength, gust_angle,
+             rain, rain_1h, rain_24h, battery_percent)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (device_id, device_name, station_name, module_type, 1 if is_outdoor else 0,
+              now, temperature, humidity, co2, pressure, noise,
+              wind_strength, wind_angle, gust_strength, gust_angle,
+              rain, rain_1h, rain_24h, battery_percent))
+
+        conn.commit()
+        conn.close()
+
+        return True
+
+    def get_netatmo_data_for_date(self, device_id, date_str=None):
+        """
+        Get Netatmo sensor data for a specific date.
+
+        Args:
+            device_id: Device ID
+            date_str: Date string (YYYY-MM-DD), defaults to today
+
+        Returns:
+            list: List of sensor readings for the day
+        """
+        if date_str is None:
+            date_str = datetime.utcnow().strftime('%Y-%m-%d')
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT * FROM netatmo_timeseries
+            WHERE device_id = ?
+            AND date(recorded_at) = date(?)
+            ORDER BY recorded_at ASC
+        ''', (device_id, date_str))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        result = []
+        for row in rows:
+            item = {
+                'device_id': row['device_id'],
+                'device_name': row['device_name'],
+                'station_name': row['station_name'],
+                'module_type': row['module_type'],
+                'is_outdoor': bool(row['is_outdoor']),
+                'recorded_at': row['recorded_at'],
+                'temperature': row['temperature'],
+                'humidity': row['humidity'],
+                'co2': row['co2'],
+                'pressure': row['pressure'],
+                'noise': row['noise'],
+                'battery_percent': row['battery_percent']
+            }
+            # Add wind/rain fields if they exist in the schema
+            try:
+                item['wind_strength'] = row['wind_strength']
+                item['wind_angle'] = row['wind_angle']
+                item['gust_strength'] = row['gust_strength']
+                item['gust_angle'] = row['gust_angle']
+                item['rain'] = row['rain']
+                item['rain_1h'] = row['rain_1h']
+                item['rain_24h'] = row['rain_24h']
+            except (IndexError, KeyError):
+                # Old schema without wind/rain columns
+                item['wind_strength'] = None
+                item['wind_angle'] = None
+                item['gust_strength'] = None
+                item['gust_angle'] = None
+                item['rain'] = None
+                item['rain_1h'] = None
+                item['rain_24h'] = None
+            result.append(item)
+
+        return result
+
+    def get_all_netatmo_devices(self):
+        """
+        Get list of Netatmo devices with sensor data.
+
+        Returns:
+            list: List of device info dicts
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT DISTINCT device_id, device_name, station_name, module_type, is_outdoor
+            FROM netatmo_timeseries
+            ORDER BY station_name, device_name
+        ''')
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [
+            {
+                'device_id': row['device_id'],
+                'device_name': row['device_name'],
+                'station_name': row['station_name'],
+                'module_type': row['module_type'],
+                'is_outdoor': bool(row['is_outdoor'])
+            }
+            for row in rows
+        ]
+
+    def cleanup_old_netatmo_data(self, days=7):
+        """
+        Remove Netatmo time series data older than specified days.
+
+        Args:
+            days: Number of days to keep
+
+        Returns:
+            int: Number of deleted records
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            DELETE FROM netatmo_timeseries
             WHERE recorded_at < datetime('now', '-{} days')
         '''.format(int(days)))
 

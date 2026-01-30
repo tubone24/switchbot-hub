@@ -3,6 +3,14 @@
         "token": "YOUR_SWITCHBOT_API_TOKEN",
         "secret": "YOUR_SWITCHBOT_API_SECRET"
     },
+    "netatmo": {
+        "enabled": false,
+        "client_id": "YOUR_NETATMO_CLIENT_ID",
+        "client_secret": "YOUR_NETATMO_CLIENT_SECRET",
+        "refresh_token": "YOUR_NETATMO_REFRESH_TOKEN",
+        "credentials_file": null,
+        "interval_seconds": 600
+    },
     "slack": {
         "channels": {
             "home_security": "https://hooks.slack.com/services/YOUR/SECURITY/WEBHOOK",
@@ -49,7 +57,8 @@
     "database": {
         "path": "device_states.db",
         "history_days": 30,
-        "sensor_data_days": 7
+        "sensor_data_days": 7,
+        "netatmo_data_days": 7
     },
     "graph_report": {
         "enabled": true,

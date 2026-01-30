@@ -448,13 +448,27 @@ class ChartGenerator:
         metric_labels = {
             'temperature': '温度 (°C)',
             'humidity': '湿度 (%)',
-            'co2': 'CO2 (ppm)'
+            'co2': 'CO2 (ppm)',
+            'pressure': '気圧 (hPa)',
+            'noise': '騒音 (dB)',
+            'wind_strength': '風速 (km/h)',
+            'gust_strength': '突風 (km/h)',
+            'rain': '雨量 (mm)',
+            'rain_1h': '雨量/1h (mm)',
+            'rain_24h': '雨量/24h (mm)'
         }
 
         metric_units = {
             'temperature': '°C',
             'humidity': '%',
-            'co2': 'ppm'
+            'co2': 'ppm',
+            'pressure': 'hPa',
+            'noise': 'dB',
+            'wind_strength': 'km/h',
+            'gust_strength': 'km/h',
+            'rain': 'mm',
+            'rain_1h': 'mm',
+            'rain_24h': 'mm'
         }
 
         options = {
