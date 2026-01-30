@@ -273,12 +273,17 @@ class SlackNotifier:
             noise = device.get('noise', {}).get('latest', '-')
             is_outdoor = device.get('is_outdoor', False)
 
-            # Get wind and rain data
-            wind_strength = device.get('wind_strength', {}).get('latest', '-')
-            gust_strength = device.get('gust_strength', {}).get('latest', '-')
-            rain = device.get('rain', {}).get('latest', '-')
-            rain_24h = device.get('rain_24h', {}).get('latest', '-')
+            # Get wind and rain data (only for outdoor sensors)
             module_type = device.get('module_type', '')
+
+            # Wind and rain only apply to specific outdoor modules
+            is_wind_module = module_type == 'NAModule2'
+            is_rain_module = module_type == 'NAModule3'
+
+            wind_strength = device.get('wind_strength', {}).get('latest', '-') if is_wind_module else '-'
+            gust_strength = device.get('gust_strength', {}).get('latest', '-') if is_wind_module else '-'
+            rain = device.get('rain', {}).get('latest', '-') if is_rain_module else '-'
+            rain_24h = device.get('rain_24h', {}).get('latest', '-') if is_rain_module else '-'
 
             has_data = any([
                 temp != '-', humidity != '-', co2 != '-',
@@ -304,11 +309,13 @@ class SlackNotifier:
                         parts.append("{}hPa".format(pressure))
                 if noise != '-':
                     parts.append("{}dB".format(noise))
+                # Wind data (only for NAModule2)
                 if wind_strength != '-':
                     wind_str = "{}km/h".format(wind_strength)
                     if gust_strength != '-':
-                        wind_str += " (gust:{}km/h)".format(gust_strength)
+                        wind_str += " (突風:{}km/h)".format(gust_strength)
                     parts.append(wind_str)
+                # Rain data (only for NAModule3)
                 if rain_24h != '-':
                     parts.append("{}mm/24h".format(rain_24h))
                 elif rain != '-':
@@ -316,7 +323,7 @@ class SlackNotifier:
 
                 line = "*{}*: {}".format(name, " / ".join(parts))
 
-                if is_outdoor or module_type in ['NAModule2', 'NAModule3']:
+                if is_outdoor or is_wind_module or is_rain_module:
                     outdoor_lines.append(line)
                 else:
                     indoor_lines.append(line)
@@ -359,10 +366,9 @@ class SlackNotifier:
             'co2': '🏠 CO2濃度',
             'pressure': '🏠 気圧',
             'noise': '🏠 騒音',
-            'wind': '🌬️ 風速',
-            'gust': '🌬️ 突風',
+            'wind': '🌬️ 風速・突風',
+            'wind_direction': '🧭 風向',
             'rain': '🌧️ 雨量',
-            'rain_24h': '🌧️ 雨量 (24h累計)',
             # Legacy keys
             'temp_humidity': '温度',
         }
@@ -372,8 +378,8 @@ class SlackNotifier:
             'outdoor_temp', 'outdoor_humidity',
             'indoor_temp', 'indoor_humidity', 'co2',
             'pressure', 'noise',
-            'wind', 'gust',
-            'rain', 'rain_24h'
+            'wind', 'wind_direction',
+            'rain'
         ]
 
         if chart_urls:

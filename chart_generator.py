@@ -68,12 +68,28 @@ def downsample_sensor_data(sensor_data, interval_seconds):
         temps = [r['temperature'] for r in readings if r.get('temperature') is not None]
         humids = [r['humidity'] for r in readings if r.get('humidity') is not None]
         co2s = [r['co2'] for r in readings if r.get('co2') is not None]
+        pressures = [r['pressure'] for r in readings if r.get('pressure') is not None]
+        noises = [r['noise'] for r in readings if r.get('noise') is not None]
+        winds = [r['wind_strength'] for r in readings if r.get('wind_strength') is not None]
+        gusts = [r['gust_strength'] for r in readings if r.get('gust_strength') is not None]
+        wind_angles = [r['wind_angle'] for r in readings if r.get('wind_angle') is not None]
+        rains = [r['rain'] for r in readings if r.get('rain') is not None]
+        rains_1h = [r['rain_1h'] for r in readings if r.get('rain_1h') is not None]
+        rains_24h = [r['rain_24h'] for r in readings if r.get('rain_24h') is not None]
 
         result.append({
             'recorded_at': representative_timestamp,
             'temperature': round(sum(temps) / len(temps), 1) if temps else None,
             'humidity': round(sum(humids) / len(humids)) if humids else None,
-            'co2': round(sum(co2s) / len(co2s)) if co2s else None
+            'co2': round(sum(co2s) / len(co2s)) if co2s else None,
+            'pressure': round(sum(pressures) / len(pressures), 1) if pressures else None,
+            'noise': round(sum(noises) / len(noises)) if noises else None,
+            'wind_strength': round(sum(winds) / len(winds)) if winds else None,
+            'gust_strength': round(sum(gusts) / len(gusts)) if gusts else None,
+            'wind_angle': round(sum(wind_angles) / len(wind_angles)) if wind_angles else None,
+            'rain': round(sum(rains) / len(rains), 1) if rains else None,
+            'rain_1h': round(sum(rains_1h) / len(rains_1h), 1) if rains_1h else None,
+            'rain_24h': round(sum(rains_24h) / len(rains_24h), 1) if rains_24h else None,
         })
 
     return result
@@ -521,6 +537,387 @@ class ChartGenerator:
         )
 
         return self.get_chart_url(config, use_short_url)
+
+    def generate_rain_chart(self, devices_data, date_str, use_short_url=True, interval_seconds=None):
+        """
+        Generate combined rain chart with bar (1h) and line (24h).
+
+        Args:
+            devices_data: Dict of {device_name: sensor_data_list}
+            date_str: Date string for title
+            use_short_url: Use short URL
+            interval_seconds: Interval for downsampling
+
+        Returns:
+            str: Chart URL
+        """
+        # Downsample if needed
+        if interval_seconds and interval_seconds > 0:
+            devices_data = {
+                name: downsample_sensor_data(data, interval_seconds)
+                for name, data in devices_data.items()
+            }
+
+        # Find all unique time labels
+        all_times = set()
+        for data in devices_data.values():
+            for reading in data:
+                timestamp = reading['recorded_at']
+                if 'T' in timestamp:
+                    time_utc = timestamp.split('T')[1][:5]
+                else:
+                    time_utc = timestamp[11:16]
+                time_jst = utc_to_jst(time_utc)
+                all_times.add(time_jst)
+
+        labels = sorted(list(all_times))
+        datasets = []
+
+        # Colors
+        bar_color = 'rgba(54, 162, 235, 0.7)'  # Blue for 1h rain
+        line_color = 'rgb(255, 99, 132)'       # Red for 24h rain
+
+        for device_name, data in devices_data.items():
+            # Build time -> value mapping
+            time_values_1h = {}
+            time_values_24h = {}
+            for reading in data:
+                timestamp = reading['recorded_at']
+                if 'T' in timestamp:
+                    time_utc = timestamp.split('T')[1][:5]
+                else:
+                    time_utc = timestamp[11:16]
+                time_jst = utc_to_jst(time_utc)
+                time_values_1h[time_jst] = reading.get('rain_1h')
+                time_values_24h[time_jst] = reading.get('rain_24h')
+
+            # 1h rain as bar
+            values_1h = [time_values_1h.get(t) for t in labels]
+            if any(v is not None for v in values_1h):
+                datasets.append({
+                    'type': 'bar',
+                    'label': '{} (1h)'.format(device_name),
+                    'data': values_1h,
+                    'backgroundColor': bar_color,
+                    'borderColor': bar_color,
+                    'yAxisID': 'y'
+                })
+
+            # 24h rain as line
+            values_24h = [time_values_24h.get(t) for t in labels]
+            if any(v is not None for v in values_24h):
+                datasets.append({
+                    'type': 'line',
+                    'label': '{} (24h累計)'.format(device_name),
+                    'data': values_24h,
+                    'borderColor': line_color,
+                    'backgroundColor': 'transparent',
+                    'fill': False,
+                    'tension': 0.3,
+                    'yAxisID': 'y1'
+                })
+
+        if not datasets:
+            return None
+
+        options = {
+            'scales': {
+                'y': {
+                    'type': 'linear',
+                    'display': True,
+                    'position': 'left',
+                    'title': {'display': True, 'text': '1h雨量 (mm)'},
+                    'min': 0
+                },
+                'y1': {
+                    'type': 'linear',
+                    'display': True,
+                    'position': 'right',
+                    'title': {'display': True, 'text': '24h累計 (mm)'},
+                    'min': 0,
+                    'grid': {'drawOnChartArea': False}
+                }
+            },
+            'plugins': {
+                'legend': {
+                    'display': True,
+                    'position': 'bottom'
+                }
+            }
+        }
+
+        config = self._create_chart_config(
+            'bar',  # Base type is bar
+            labels,
+            datasets,
+            title='雨量 ({})'.format(date_str),
+            options=options
+        )
+
+        return self.get_chart_url(config, use_short_url)
+
+    def generate_wind_chart(self, devices_data, date_str, use_short_url=True, interval_seconds=None):
+        """
+        Generate wind chart with speed, gust, and direction annotations.
+
+        Args:
+            devices_data: Dict of {device_name: sensor_data_list}
+            date_str: Date string for title
+            use_short_url: Use short URL
+            interval_seconds: Interval for downsampling
+
+        Returns:
+            str: Chart URL
+        """
+        # Downsample if needed
+        if interval_seconds and interval_seconds > 0:
+            devices_data = {
+                name: downsample_sensor_data(data, interval_seconds)
+                for name, data in devices_data.items()
+            }
+
+        # Find all unique time labels
+        all_times = set()
+        for data in devices_data.values():
+            for reading in data:
+                timestamp = reading['recorded_at']
+                if 'T' in timestamp:
+                    time_utc = timestamp.split('T')[1][:5]
+                else:
+                    time_utc = timestamp[11:16]
+                time_jst = utc_to_jst(time_utc)
+                all_times.add(time_jst)
+
+        labels = sorted(list(all_times))
+        datasets = []
+
+        # Colors
+        wind_color = 'rgb(54, 162, 235)'   # Blue for wind
+        gust_color = 'rgb(255, 99, 132)'    # Red for gust
+
+        for device_name, data in devices_data.items():
+            # Build time -> value mapping
+            time_wind = {}
+            time_gust = {}
+            time_angle = {}
+            for reading in data:
+                timestamp = reading['recorded_at']
+                if 'T' in timestamp:
+                    time_utc = timestamp.split('T')[1][:5]
+                else:
+                    time_utc = timestamp[11:16]
+                time_jst = utc_to_jst(time_utc)
+                time_wind[time_jst] = reading.get('wind_strength')
+                time_gust[time_jst] = reading.get('gust_strength')
+                time_angle[time_jst] = reading.get('wind_angle')
+
+            # Wind speed
+            values_wind = [time_wind.get(t) for t in labels]
+            if any(v is not None for v in values_wind):
+                # Create labels with direction
+                point_labels = []
+                for t in labels:
+                    angle = time_angle.get(t)
+                    if angle is not None:
+                        direction = self._angle_to_direction(angle)
+                        point_labels.append(direction)
+                    else:
+                        point_labels.append('')
+
+                datasets.append({
+                    'label': '{} 風速'.format(device_name),
+                    'data': values_wind,
+                    'borderColor': wind_color,
+                    'backgroundColor': 'rgba(54, 162, 235, 0.1)',
+                    'fill': True,
+                    'tension': 0.3
+                })
+
+            # Gust speed
+            values_gust = [time_gust.get(t) for t in labels]
+            if any(v is not None for v in values_gust):
+                datasets.append({
+                    'label': '{} 突風'.format(device_name),
+                    'data': values_gust,
+                    'borderColor': gust_color,
+                    'backgroundColor': 'transparent',
+                    'fill': False,
+                    'tension': 0.3,
+                    'borderDash': [5, 5]
+                })
+
+        if not datasets:
+            return None
+
+        options = {
+            'scales': {
+                'y': {
+                    'title': {'display': True, 'text': 'km/h'},
+                    'min': 0
+                }
+            },
+            'plugins': {
+                'legend': {
+                    'display': True,
+                    'position': 'bottom'
+                },
+                # Add threshold lines for wind warnings
+                'annotation': {
+                    'annotations': {
+                        'moderate': {
+                            'type': 'line',
+                            'yMin': 36,
+                            'yMax': 36,
+                            'borderColor': 'rgba(255, 206, 86, 0.8)',
+                            'borderWidth': 1,
+                            'borderDash': [3, 3],
+                            'label': {
+                                'content': 'やや強い風 (36km/h)',
+                                'enabled': False
+                            }
+                        },
+                        'strong': {
+                            'type': 'line',
+                            'yMin': 54,
+                            'yMax': 54,
+                            'borderColor': 'orange',
+                            'borderWidth': 2,
+                            'borderDash': [5, 5]
+                        },
+                        'violent': {
+                            'type': 'line',
+                            'yMin': 72,
+                            'yMax': 72,
+                            'borderColor': 'red',
+                            'borderWidth': 2,
+                            'borderDash': [5, 5]
+                        }
+                    }
+                }
+            }
+        }
+
+        config = self._create_chart_config(
+            'line',
+            labels,
+            datasets,
+            title='風速 ({})'.format(date_str),
+            options=options
+        )
+
+        return self.get_chart_url(config, use_short_url)
+
+    def generate_wind_direction_chart(self, devices_data, date_str, use_short_url=True, interval_seconds=None):
+        """
+        Generate wind direction chart showing direction over time.
+        Uses scatter chart with direction labels.
+
+        Args:
+            devices_data: Dict of {device_name: sensor_data_list}
+            date_str: Date string for title
+            use_short_url: Use short URL
+            interval_seconds: Interval for downsampling
+
+        Returns:
+            str: Chart URL
+        """
+        # Downsample if needed
+        if interval_seconds and interval_seconds > 0:
+            devices_data = {
+                name: downsample_sensor_data(data, interval_seconds)
+                for name, data in devices_data.items()
+            }
+
+        # Find all unique time labels
+        all_times = set()
+        for data in devices_data.values():
+            for reading in data:
+                timestamp = reading['recorded_at']
+                if 'T' in timestamp:
+                    time_utc = timestamp.split('T')[1][:5]
+                else:
+                    time_utc = timestamp[11:16]
+                time_jst = utc_to_jst(time_utc)
+                all_times.add(time_jst)
+
+        labels = sorted(list(all_times))
+        datasets = []
+
+        colors = [
+            'rgb(54, 162, 235)',
+            'rgb(255, 99, 132)',
+            'rgb(75, 192, 192)',
+        ]
+
+        for i, (device_name, data) in enumerate(devices_data.items()):
+            # Build time -> angle mapping
+            time_angle = {}
+            for reading in data:
+                timestamp = reading['recorded_at']
+                if 'T' in timestamp:
+                    time_utc = timestamp.split('T')[1][:5]
+                else:
+                    time_utc = timestamp[11:16]
+                time_jst = utc_to_jst(time_utc)
+                time_angle[time_jst] = reading.get('wind_angle')
+
+            # Wind angle as line (0-360)
+            values = [time_angle.get(t) for t in labels]
+            if any(v is not None for v in values):
+                color = colors[i % len(colors)]
+                datasets.append({
+                    'label': device_name,
+                    'data': values,
+                    'borderColor': color,
+                    'backgroundColor': color,
+                    'fill': False,
+                    'tension': 0,
+                    'spanGaps': True,
+                    'pointRadius': 4
+                })
+
+        if not datasets:
+            return None
+
+        # Direction labels on Y axis
+        options = {
+            'scales': {
+                'y': {
+                    'min': 0,
+                    'max': 360,
+                    'ticks': {
+                        'stepSize': 45,
+                        'callback': 'function(value) { var dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW", "N"]; return dirs[value/45]; }'
+                    },
+                    'title': {'display': True, 'text': '風向'}
+                }
+            },
+            'plugins': {
+                'legend': {
+                    'display': True,
+                    'position': 'bottom'
+                }
+            }
+        }
+
+        config = self._create_chart_config(
+            'line',
+            labels,
+            datasets,
+            title='風向 ({})'.format(date_str),
+            options=options
+        )
+
+        return self.get_chart_url(config, use_short_url)
+
+    def _angle_to_direction(self, angle):
+        """Convert angle (0-360) to compass direction."""
+        if angle is None:
+            return ''
+        directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                      'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
+        idx = round(angle / 22.5) % 16
+        return directions[idx]
 
 
 if __name__ == '__main__':

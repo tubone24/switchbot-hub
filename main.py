@@ -880,29 +880,26 @@ class SwitchBotMonitor:
                 )
                 logging.debug("Generated noise chart")
 
-            # Wind chart (Netatmo NAModule2)
+            # Wind chart (Netatmo NAModule2) - combined wind speed and gust
             if wind_data:
-                chart_urls['wind'] = self.chart_generator.generate_multi_device_chart(
-                    wind_data, 'wind_strength', date_str, use_short_url=True,
+                chart_urls['wind'] = self.chart_generator.generate_wind_chart(
+                    wind_data, date_str, use_short_url=True,
                     interval_seconds=interval_seconds
                 )
-                chart_urls['gust'] = self.chart_generator.generate_multi_device_chart(
-                    wind_data, 'gust_strength', date_str, use_short_url=True,
+                # Wind direction chart
+                chart_urls['wind_direction'] = self.chart_generator.generate_wind_direction_chart(
+                    wind_data, date_str, use_short_url=True,
                     interval_seconds=interval_seconds
                 )
                 logging.debug("Generated wind charts")
 
-            # Rain chart (Netatmo NAModule3)
+            # Rain chart (Netatmo NAModule3) - combined bar (1h) and line (24h)
             if rain_data:
-                chart_urls['rain'] = self.chart_generator.generate_multi_device_chart(
-                    rain_data, 'rain', date_str, use_short_url=True,
+                chart_urls['rain'] = self.chart_generator.generate_rain_chart(
+                    rain_data, date_str, use_short_url=True,
                     interval_seconds=interval_seconds
                 )
-                chart_urls['rain_24h'] = self.chart_generator.generate_multi_device_chart(
-                    rain_data, 'rain_24h', date_str, use_short_url=True,
-                    interval_seconds=interval_seconds
-                )
-                logging.debug("Generated rain charts")
+                logging.debug("Generated rain chart")
 
         except Exception as e:
             logging.error("Error generating chart: %s", e)
