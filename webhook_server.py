@@ -119,8 +119,12 @@ class WebhookServer:
             logging.info("Stopping webhook server...")
             server = self.server
             self.server = None
-            server.shutdown()
-            server.server_close()
+            # Don't call shutdown() - we use custom loop with handle_request()
+            # Just close the socket; the daemon thread will exit on its own
+            try:
+                server.server_close()
+            except Exception:
+                pass
 
     def get_local_url(self):
         """Get local webhook URL."""

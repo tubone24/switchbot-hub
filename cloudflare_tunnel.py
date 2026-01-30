@@ -133,11 +133,14 @@ class CloudflareTunnel:
             logging.info("Stopping cloudflared tunnel...")
             try:
                 self.process.terminate()
-                self.process.wait(timeout=5)
+                self.process.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 logging.warning("cloudflared did not terminate, killing...")
                 self.process.kill()
-                self.process.wait()
+                try:
+                    self.process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass  # Give up, process will be orphaned
             except Exception as e:
                 logging.error("Error stopping cloudflared: %s", e)
             finally:
