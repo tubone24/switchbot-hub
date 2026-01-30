@@ -82,7 +82,7 @@ class DeviceDatabase:
             ON sensor_timeseries(device_id, recorded_at)
         ''')
 
-        # Netatmo time series table (includes pressure and noise)
+        # Netatmo time series table (includes pressure, noise, wind, rain)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS netatmo_timeseries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,6 +97,13 @@ class DeviceDatabase:
                 co2 INTEGER,
                 pressure REAL,
                 noise INTEGER,
+                wind_strength INTEGER,
+                wind_angle INTEGER,
+                gust_strength INTEGER,
+                gust_angle INTEGER,
+                rain REAL,
+                rain_1h REAL,
+                rain_24h REAL,
                 battery_percent INTEGER
             )
         ''')
@@ -107,8 +114,37 @@ class DeviceDatabase:
             ON netatmo_timeseries(device_id, recorded_at)
         ''')
 
+        # Migration: Add wind/rain columns to netatmo_timeseries if they don't exist
+        self._migrate_netatmo_columns(cursor)
+
         conn.commit()
         conn.close()
+
+    def _migrate_netatmo_columns(self, cursor):
+        """Add wind/rain columns to netatmo_timeseries if they don't exist."""
+        # Check existing columns
+        cursor.execute("PRAGMA table_info(netatmo_timeseries)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        # New columns to add
+        new_columns = [
+            ('wind_strength', 'INTEGER'),
+            ('wind_angle', 'INTEGER'),
+            ('gust_strength', 'INTEGER'),
+            ('gust_angle', 'INTEGER'),
+            ('rain', 'REAL'),
+            ('rain_1h', 'REAL'),
+            ('rain_24h', 'REAL'),
+        ]
+
+        for col_name, col_type in new_columns:
+            if col_name not in existing_columns:
+                try:
+                    cursor.execute(
+                        'ALTER TABLE netatmo_timeseries ADD COLUMN {} {}'.format(col_name, col_type)
+                    )
+                except Exception:
+                    pass  # Column might already exist
 
     def get_device_state(self, device_id):
         """
@@ -539,7 +575,9 @@ class DeviceDatabase:
 
     def save_netatmo_data(self, device_id, device_name, station_name, module_type,
                           is_outdoor, temperature=None, humidity=None, co2=None,
-                          pressure=None, noise=None, battery_percent=None):
+                          pressure=None, noise=None, wind_strength=None, wind_angle=None,
+                          gust_strength=None, gust_angle=None, rain=None, rain_1h=None,
+                          rain_24h=None, battery_percent=None):
         """
         Save Netatmo sensor time series data.
 
@@ -554,13 +592,25 @@ class DeviceDatabase:
             co2: CO2 in ppm
             pressure: Pressure in mbar
             noise: Noise level in dB
+            wind_strength: Wind speed in km/h
+            wind_angle: Wind direction in degrees
+            gust_strength: Gust speed in km/h
+            gust_angle: Gust direction in degrees
+            rain: Current rain in mm
+            rain_1h: Rain in last hour in mm
+            rain_24h: Rain in last 24 hours in mm
             battery_percent: Battery percentage
 
         Returns:
             bool: True if data was saved
         """
         # Only save if there's any sensor data
-        if temperature is None and humidity is None and co2 is None and pressure is None and noise is None:
+        has_data = any([
+            temperature is not None, humidity is not None, co2 is not None,
+            pressure is not None, noise is not None,
+            wind_strength is not None, rain is not None
+        ])
+        if not has_data:
             return False
 
         now = datetime.utcnow().isoformat()
@@ -571,10 +621,14 @@ class DeviceDatabase:
         cursor.execute('''
             INSERT INTO netatmo_timeseries
             (device_id, device_name, station_name, module_type, is_outdoor,
-             recorded_at, temperature, humidity, co2, pressure, noise, battery_percent)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             recorded_at, temperature, humidity, co2, pressure, noise,
+             wind_strength, wind_angle, gust_strength, gust_angle,
+             rain, rain_1h, rain_24h, battery_percent)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (device_id, device_name, station_name, module_type, 1 if is_outdoor else 0,
-              now, temperature, humidity, co2, pressure, noise, battery_percent))
+              now, temperature, humidity, co2, pressure, noise,
+              wind_strength, wind_angle, gust_strength, gust_angle,
+              rain, rain_1h, rain_24h, battery_percent))
 
         conn.commit()
         conn.close()
@@ -608,8 +662,9 @@ class DeviceDatabase:
         rows = cursor.fetchall()
         conn.close()
 
-        return [
-            {
+        result = []
+        for row in rows:
+            item = {
                 'device_id': row['device_id'],
                 'device_name': row['device_name'],
                 'station_name': row['station_name'],
@@ -623,8 +678,27 @@ class DeviceDatabase:
                 'noise': row['noise'],
                 'battery_percent': row['battery_percent']
             }
-            for row in rows
-        ]
+            # Add wind/rain fields if they exist in the schema
+            try:
+                item['wind_strength'] = row['wind_strength']
+                item['wind_angle'] = row['wind_angle']
+                item['gust_strength'] = row['gust_strength']
+                item['gust_angle'] = row['gust_angle']
+                item['rain'] = row['rain']
+                item['rain_1h'] = row['rain_1h']
+                item['rain_24h'] = row['rain_24h']
+            except (IndexError, KeyError):
+                # Old schema without wind/rain columns
+                item['wind_strength'] = None
+                item['wind_angle'] = None
+                item['gust_strength'] = None
+                item['gust_angle'] = None
+                item['rain'] = None
+                item['rain_1h'] = None
+                item['rain_24h'] = None
+            result.append(item)
+
+        return result
 
     def get_all_netatmo_devices(self):
         """

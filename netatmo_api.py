@@ -24,10 +24,13 @@ class NetatmoAPI:
     MODULE_TYPES = {
         'NAMain': 'Indoor Station',      # Base station (indoor): temp, humidity, CO2, noise, pressure
         'NAModule1': 'Outdoor Module',   # Outdoor: temp, humidity
-        'NAModule2': 'Wind Gauge',       # Wind sensor
-        'NAModule3': 'Rain Gauge',       # Rain gauge
+        'NAModule2': 'Wind Gauge',       # Wind: WindStrength, WindAngle, GustStrength, GustAngle
+        'NAModule3': 'Rain Gauge',       # Rain: Rain, sum_rain_1, sum_rain_24
         'NAModule4': 'Indoor Module',    # Additional indoor: temp, humidity, CO2
     }
+
+    # Outdoor module types (for is_outdoor flag)
+    OUTDOOR_MODULE_TYPES = ['NAModule1', 'NAModule2', 'NAModule3']
 
     def __init__(self, client_id, client_secret, refresh_token, credentials_file=None):
         """
@@ -186,6 +189,13 @@ class NetatmoAPI:
                       'co2': int or None,
                       'pressure': float or None,
                       'noise': int or None,
+                      'wind_strength': int or None,      # km/h
+                      'wind_angle': int or None,         # degrees
+                      'gust_strength': int or None,      # km/h
+                      'gust_angle': int or None,         # degrees
+                      'rain': float or None,             # mm (current)
+                      'rain_1h': float or None,          # mm (last hour)
+                      'rain_24h': float or None,         # mm (last 24 hours)
                       'battery_percent': int or None,
                       'wifi_status': int or None,
                       'rf_status': int or None,
@@ -216,6 +226,13 @@ class NetatmoAPI:
                     'co2': dashboard.get('CO2'),
                     'pressure': dashboard.get('Pressure'),
                     'noise': dashboard.get('Noise'),
+                    'wind_strength': None,
+                    'wind_angle': None,
+                    'gust_strength': None,
+                    'gust_angle': None,
+                    'rain': None,
+                    'rain_1h': None,
+                    'rain_24h': None,
                     'battery_percent': None,  # Main station has no battery
                     'wifi_status': device.get('wifi_status'),
                     'rf_status': None,
@@ -231,7 +248,7 @@ class NetatmoAPI:
                     continue
 
                 module_type = module.get('type', '')
-                is_outdoor = module_type == 'NAModule1'
+                is_outdoor = module_type in self.OUTDOOR_MODULE_TYPES
 
                 reading = {
                     'device_id': module.get('_id'),
@@ -244,6 +261,15 @@ class NetatmoAPI:
                     'co2': module_dashboard.get('CO2'),
                     'pressure': None,  # Only main station has pressure
                     'noise': None,     # Only main station has noise
+                    # Wind data (NAModule2)
+                    'wind_strength': module_dashboard.get('WindStrength'),
+                    'wind_angle': module_dashboard.get('WindAngle'),
+                    'gust_strength': module_dashboard.get('GustStrength'),
+                    'gust_angle': module_dashboard.get('GustAngle'),
+                    # Rain data (NAModule3)
+                    'rain': module_dashboard.get('Rain'),
+                    'rain_1h': module_dashboard.get('sum_rain_1'),
+                    'rain_24h': module_dashboard.get('sum_rain_24'),
                     'battery_percent': module.get('battery_percent'),
                     'wifi_status': None,
                     'rf_status': module.get('rf_status'),

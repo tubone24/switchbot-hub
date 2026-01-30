@@ -420,6 +420,13 @@ class SwitchBotMonitor:
                     co2=reading.get('co2'),
                     pressure=reading.get('pressure'),
                     noise=reading.get('noise'),
+                    wind_strength=reading.get('wind_strength'),
+                    wind_angle=reading.get('wind_angle'),
+                    gust_strength=reading.get('gust_strength'),
+                    gust_angle=reading.get('gust_angle'),
+                    rain=reading.get('rain'),
+                    rain_1h=reading.get('rain_1h'),
+                    rain_24h=reading.get('rain_24h'),
                     battery_percent=reading.get('battery_percent')
                 )
 
@@ -436,6 +443,14 @@ class SwitchBotMonitor:
                         parts.append("pressure={:.1f}".format(reading['pressure']))
                     if reading.get('noise') is not None:
                         parts.append("noise={}".format(reading['noise']))
+                    if reading.get('wind_strength') is not None:
+                        parts.append("wind={}km/h".format(reading['wind_strength']))
+                    if reading.get('gust_strength') is not None:
+                        parts.append("gust={}km/h".format(reading['gust_strength']))
+                    if reading.get('rain') is not None:
+                        parts.append("rain={}mm".format(reading['rain']))
+                    if reading.get('rain_24h') is not None:
+                        parts.append("rain24h={}mm".format(reading['rain_24h']))
 
                     logging.info(
                         "[Netatmo] %s (%s/%s): %s",
@@ -481,6 +496,11 @@ class SwitchBotMonitor:
         # Separate outdoor and indoor sensor data
         outdoor_data = {}  # {device_name: sensor_data_list}
         indoor_data = {}   # {device_name: sensor_data_list}
+        # Netatmo-specific data
+        wind_data = {}     # {device_name: sensor_data_list} for wind sensors
+        rain_data = {}     # {device_name: sensor_data_list} for rain sensors
+        pressure_data = {} # {device_name: sensor_data_list} for pressure (indoor only)
+        noise_data = {}    # {device_name: sensor_data_list} for noise (indoor only)
         devices_summary = []
 
         # Process SwitchBot sensors
@@ -508,11 +528,14 @@ class SwitchBotMonitor:
                 devices_summary.append({
                     'device_name': "[SB] " + device_name,
                     'source': 'SwitchBot',
+                    'module_type': 'SwitchBot',
                     'temperature': {'latest': latest.get('temperature', '-')},
                     'humidity': {'latest': latest.get('humidity', '-')},
                     'co2': {'latest': latest.get('co2', '-')},
                     'pressure': {'latest': '-'},
                     'noise': {'latest': '-'},
+                    'wind_strength': {'latest': '-'},
+                    'rain_24h': {'latest': '-'},
                     'is_outdoor': is_outdoor
                 })
 
@@ -526,6 +549,7 @@ class SwitchBotMonitor:
             for device in netatmo_devices:
                 device_id = device['device_id']
                 device_name = device['device_name']
+                module_type = device.get('module_type', '')
                 is_outdoor = device.get('is_outdoor', False)
 
                 try:
@@ -536,39 +560,57 @@ class SwitchBotMonitor:
                         logging.debug("No Netatmo data for %s on %s", device_name, date_str)
                         continue
 
-                    # Separate outdoor vs indoor
                     display_name = "[NA] " + device_name
-                    if is_outdoor:
+
+                    # Categorize by module type
+                    if module_type == 'NAModule2':
+                        # Wind sensor
+                        wind_data[display_name] = sensor_data
+                    elif module_type == 'NAModule3':
+                        # Rain sensor
+                        rain_data[display_name] = sensor_data
+                    elif is_outdoor:
+                        # Outdoor temperature/humidity (NAModule1)
                         outdoor_data[display_name] = sensor_data
                     else:
+                        # Indoor (NAMain, NAModule4)
                         indoor_data[display_name] = sensor_data
+                        # Pressure and noise from main station
+                        if module_type == 'NAMain':
+                            pressure_data[display_name] = sensor_data
+                            noise_data[display_name] = sensor_data
 
                     # Get latest values for summary
                     latest = sensor_data[-1] if sensor_data else {}
                     devices_summary.append({
                         'device_name': display_name,
                         'source': 'Netatmo',
+                        'module_type': module_type,
                         'temperature': {'latest': latest.get('temperature', '-')},
                         'humidity': {'latest': latest.get('humidity', '-')},
                         'co2': {'latest': latest.get('co2', '-')},
                         'pressure': {'latest': latest.get('pressure', '-')},
                         'noise': {'latest': latest.get('noise', '-')},
+                        'wind_strength': {'latest': latest.get('wind_strength', '-')},
+                        'gust_strength': {'latest': latest.get('gust_strength', '-')},
+                        'rain': {'latest': latest.get('rain', '-')},
+                        'rain_24h': {'latest': latest.get('rain_24h', '-')},
                         'is_outdoor': is_outdoor
                     })
 
                 except Exception as e:
                     logging.error("Error getting Netatmo data for %s: %s", device_name, e)
 
-        if not outdoor_data and not indoor_data:
+        if not outdoor_data and not indoor_data and not wind_data and not rain_data:
             logging.info("No sensor data collected for graph report")
             return
 
-        # Generate charts (5 total: outdoor temp/humidity, indoor temp/humidity, CO2)
+        # Generate charts
         # Get interval for downsampling from config
         interval_seconds = self.config.get('monitor', {}).get('interval_seconds', 1800)
         chart_urls = {}
         try:
-            # Outdoor charts
+            # Outdoor charts (temperature, humidity)
             if outdoor_data:
                 chart_urls['outdoor_temp'] = self.chart_generator.generate_multi_device_chart(
                     outdoor_data, 'temperature', date_str, use_short_url=True,
@@ -580,7 +622,7 @@ class SwitchBotMonitor:
                 )
                 logging.debug("Generated outdoor charts")
 
-            # Indoor charts
+            # Indoor charts (temperature, humidity, CO2)
             if indoor_data:
                 chart_urls['indoor_temp'] = self.chart_generator.generate_multi_device_chart(
                     indoor_data, 'temperature', date_str, use_short_url=True,
@@ -595,6 +637,46 @@ class SwitchBotMonitor:
                     interval_seconds=interval_seconds
                 )
                 logging.debug("Generated indoor charts")
+
+            # Pressure chart (Netatmo main station only)
+            if pressure_data:
+                chart_urls['pressure'] = self.chart_generator.generate_multi_device_chart(
+                    pressure_data, 'pressure', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
+                )
+                logging.debug("Generated pressure chart")
+
+            # Noise chart (Netatmo main station only)
+            if noise_data:
+                chart_urls['noise'] = self.chart_generator.generate_multi_device_chart(
+                    noise_data, 'noise', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
+                )
+                logging.debug("Generated noise chart")
+
+            # Wind chart (Netatmo NAModule2)
+            if wind_data:
+                chart_urls['wind'] = self.chart_generator.generate_multi_device_chart(
+                    wind_data, 'wind_strength', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
+                )
+                chart_urls['gust'] = self.chart_generator.generate_multi_device_chart(
+                    wind_data, 'gust_strength', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
+                )
+                logging.debug("Generated wind charts")
+
+            # Rain chart (Netatmo NAModule3)
+            if rain_data:
+                chart_urls['rain'] = self.chart_generator.generate_multi_device_chart(
+                    rain_data, 'rain', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
+                )
+                chart_urls['rain_24h'] = self.chart_generator.generate_multi_device_chart(
+                    rain_data, 'rain_24h', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
+                )
+                logging.debug("Generated rain charts")
 
         except Exception as e:
             logging.error("Error generating chart: %s", e)
