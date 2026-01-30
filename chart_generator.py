@@ -14,6 +14,71 @@ except ImportError:
 import requests
 
 
+def downsample_sensor_data(sensor_data, interval_seconds):
+    """
+    Downsample sensor data by averaging values within each interval.
+
+    Args:
+        sensor_data: List of sensor readings with 'recorded_at', 'temperature',
+                     'humidity', 'co2' keys
+        interval_seconds: Interval in seconds for grouping data points
+
+    Returns:
+        list: Downsampled sensor data with averaged values
+    """
+    if not sensor_data or interval_seconds <= 0:
+        return sensor_data
+
+    # Parse timestamps and group by interval
+    from datetime import datetime
+
+    grouped = {}  # {interval_key: [readings]}
+
+    for reading in sensor_data:
+        timestamp = reading['recorded_at']
+        try:
+            # Parse ISO format timestamp
+            if 'T' in timestamp:
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            else:
+                dt = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+
+            # Calculate interval key (seconds since midnight, rounded to interval)
+            seconds_since_midnight = dt.hour * 3600 + dt.minute * 60 + dt.second
+            interval_key = (seconds_since_midnight // interval_seconds) * interval_seconds
+
+            if interval_key not in grouped:
+                grouped[interval_key] = []
+            grouped[interval_key].append(reading)
+        except (ValueError, AttributeError) as e:
+            # Skip invalid timestamps
+            continue
+
+    # Calculate averages for each interval
+    result = []
+    for interval_key in sorted(grouped.keys()):
+        readings = grouped[interval_key]
+        if not readings:
+            continue
+
+        # Use the first reading's timestamp as the representative time
+        representative_timestamp = readings[0]['recorded_at']
+
+        # Calculate averages (ignore None values)
+        temps = [r['temperature'] for r in readings if r.get('temperature') is not None]
+        humids = [r['humidity'] for r in readings if r.get('humidity') is not None]
+        co2s = [r['co2'] for r in readings if r.get('co2') is not None]
+
+        result.append({
+            'recorded_at': representative_timestamp,
+            'temperature': round(sum(temps) / len(temps), 1) if temps else None,
+            'humidity': round(sum(humids) / len(humids)) if humids else None,
+            'co2': round(sum(co2s) / len(co2s)) if co2s else None
+        })
+
+    return result
+
+
 def utc_to_jst(time_str):
     """
     Convert UTC time string (HH:MM) to JST (UTC+9).
@@ -295,7 +360,7 @@ class ChartGenerator:
 
         return charts
 
-    def generate_multi_device_chart(self, devices_data, metric, date_str, use_short_url=True):
+    def generate_multi_device_chart(self, devices_data, metric, date_str, use_short_url=True, interval_seconds=None):
         """
         Generate chart comparing multiple devices.
 
@@ -304,10 +369,19 @@ class ChartGenerator:
             metric: Metric to compare ('temperature', 'humidity', 'co2')
             date_str: Date string for title
             use_short_url: Use short URL
+            interval_seconds: Interval in seconds for downsampling data points.
+                              If specified, data will be averaged within each interval.
 
         Returns:
             str: Chart URL
         """
+        # Downsample data if interval is specified
+        if interval_seconds and interval_seconds > 0:
+            devices_data = {
+                name: downsample_sensor_data(data, interval_seconds)
+                for name, data in devices_data.items()
+            }
+
         # More colors for multiple devices
         colors = [
             ('rgb(255, 99, 132)', 'rgba(255, 99, 132, 0.1)'),   # Red
