@@ -252,7 +252,7 @@ class SlackNotifier:
 
         Args:
             date_str: Date string (YYYY-MM-DD)
-            devices_data: List of device summary dicts
+            devices_data: List of device summary dicts (with is_outdoor flag)
             chart_urls: Dict of chart URLs
 
         Returns:
@@ -260,16 +260,18 @@ class SlackNotifier:
         """
         timestamp = datetime.now().strftime('%H:%M')
 
-        # Build summary table
-        summary_lines = []
+        # Build summary table (separate outdoor and indoor)
+        outdoor_lines = []
+        indoor_lines = []
+
         for device in devices_data:
             name = device.get('device_name', 'Unknown')
             temp = device.get('temperature', {}).get('latest', '-')
             humidity = device.get('humidity', {}).get('latest', '-')
             co2 = device.get('co2', {}).get('latest', '-')
+            is_outdoor = device.get('is_outdoor', False)
 
             if temp != '-' or humidity != '-' or co2 != '-':
-                line = "*{}*: ".format(name)
                 parts = []
                 if temp != '-':
                     parts.append("{}°C".format(temp))
@@ -277,10 +279,21 @@ class SlackNotifier:
                     parts.append("{}%".format(humidity))
                 if co2 != '-':
                     parts.append("{}ppm".format(co2))
-                line += " / ".join(parts)
-                summary_lines.append(line)
+                line = "*{}*: {}".format(name, " / ".join(parts))
 
-        summary_text = "\n".join(summary_lines) if summary_lines else "No data"
+                if is_outdoor:
+                    outdoor_lines.append(line)
+                else:
+                    indoor_lines.append(line)
+
+        # Build summary text
+        summary_parts = []
+        if outdoor_lines:
+            summary_parts.append("*🌳 屋外*\n" + "\n".join(outdoor_lines))
+        if indoor_lines:
+            summary_parts.append("*🏠 屋内*\n" + "\n".join(indoor_lines))
+
+        summary_text = "\n\n".join(summary_parts) if summary_parts else "No data"
 
         text = "Atmosphere Report ({} {})".format(date_str, timestamp)
 
@@ -302,14 +315,25 @@ class SlackNotifier:
             }
         ]
 
-        # Add chart images
+        # Chart titles mapping
+        chart_titles = {
+            'outdoor_temp': '🌳 屋外 温度',
+            'outdoor_humidity': '🌳 屋外 湿度',
+            'indoor_temp': '🏠 屋内 温度',
+            'indoor_humidity': '🏠 屋内 湿度',
+            'co2': '🏠 CO2濃度',
+            # Legacy keys
+            'temp_humidity': '温度',
+        }
+
+        # Add chart images in specific order
+        chart_order = ['outdoor_temp', 'outdoor_humidity', 'indoor_temp', 'indoor_humidity', 'co2']
+
         if chart_urls:
-            for chart_name, url in chart_urls.items():
+            for chart_name in chart_order:
+                url = chart_urls.get(chart_name)
                 if url:
-                    chart_title = {
-                        'temp_humidity': '温度・湿度',
-                        'co2': 'CO2濃度'
-                    }.get(chart_name, chart_name)
+                    chart_title = chart_titles.get(chart_name, chart_name)
 
                     blocks.append({
                         "type": "image",

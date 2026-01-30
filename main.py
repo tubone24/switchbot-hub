@@ -380,10 +380,19 @@ class SwitchBotMonitor:
         ]
         return device_type in sensor_types
 
+    def _is_outdoor_sensor(self, device_name):
+        """Check if device is an outdoor sensor."""
+        outdoor_keywords = ['防水温湿度計', '屋外', 'Outdoor']
+        for keyword in outdoor_keywords:
+            if keyword in device_name:
+                return True
+        return False
+
     def send_graph_report(self):
         """
         Send graph report for all sensor devices to #atmos-graph channel.
         Shows data from today midnight to now.
+        Separates outdoor and indoor sensors.
         """
         date_str = datetime.now().strftime('%Y-%m-%d')
         logging.info("Generating graph report for %s...", date_str)
@@ -395,8 +404,9 @@ class SwitchBotMonitor:
             logging.info("No sensor data available for graph report")
             return
 
-        # Collect all sensor data for combined chart
-        devices_data = {}  # {device_name: sensor_data_list}
+        # Separate outdoor and indoor sensor data
+        outdoor_data = {}  # {device_name: sensor_data_list}
+        indoor_data = {}   # {device_name: sensor_data_list}
         devices_summary = []
 
         for device in sensor_devices:
@@ -411,38 +421,55 @@ class SwitchBotMonitor:
                     logging.debug("No data for %s on %s", device_name, date_str)
                     continue
 
-                devices_data[device_name] = sensor_data
+                # Separate outdoor vs indoor
+                if self._is_outdoor_sensor(device_name):
+                    outdoor_data[device_name] = sensor_data
+                else:
+                    indoor_data[device_name] = sensor_data
 
                 # Get latest values for summary
                 latest = sensor_data[-1] if sensor_data else {}
+                is_outdoor = self._is_outdoor_sensor(device_name)
                 devices_summary.append({
                     'device_name': device_name,
                     'temperature': {'latest': latest.get('temperature', '-')},
                     'humidity': {'latest': latest.get('humidity', '-')},
-                    'co2': {'latest': latest.get('co2', '-')}
+                    'co2': {'latest': latest.get('co2', '-')},
+                    'is_outdoor': is_outdoor
                 })
 
             except Exception as e:
                 logging.error("Error getting data for %s: %s", device_name, e)
 
-        if not devices_data:
+        if not outdoor_data and not indoor_data:
             logging.info("No sensor data collected for graph report")
             return
 
-        # Generate multi-device charts (color-coded by device)
+        # Generate charts (5 total: outdoor temp/humidity, indoor temp/humidity, CO2)
         chart_urls = {}
         try:
-            # Temperature chart (all devices)
-            chart_urls['temp_humidity'] = self.chart_generator.generate_multi_device_chart(
-                devices_data, 'temperature', date_str, use_short_url=True
-            )
-            logging.debug("Generated temperature chart")
+            # Outdoor charts
+            if outdoor_data:
+                chart_urls['outdoor_temp'] = self.chart_generator.generate_multi_device_chart(
+                    outdoor_data, 'temperature', date_str, use_short_url=True
+                )
+                chart_urls['outdoor_humidity'] = self.chart_generator.generate_multi_device_chart(
+                    outdoor_data, 'humidity', date_str, use_short_url=True
+                )
+                logging.debug("Generated outdoor charts")
 
-            # CO2 chart (all devices)
-            chart_urls['co2'] = self.chart_generator.generate_multi_device_chart(
-                devices_data, 'co2', date_str, use_short_url=True
-            )
-            logging.debug("Generated CO2 chart")
+            # Indoor charts
+            if indoor_data:
+                chart_urls['indoor_temp'] = self.chart_generator.generate_multi_device_chart(
+                    indoor_data, 'temperature', date_str, use_short_url=True
+                )
+                chart_urls['indoor_humidity'] = self.chart_generator.generate_multi_device_chart(
+                    indoor_data, 'humidity', date_str, use_short_url=True
+                )
+                chart_urls['co2'] = self.chart_generator.generate_multi_device_chart(
+                    indoor_data, 'co2', date_str, use_short_url=True
+                )
+                logging.debug("Generated indoor charts")
 
         except Exception as e:
             logging.error("Error generating chart: %s", e)
