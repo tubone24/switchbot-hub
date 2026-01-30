@@ -446,28 +446,35 @@ class SwitchBotMonitor:
             return
 
         # Generate charts (5 total: outdoor temp/humidity, indoor temp/humidity, CO2)
+        # Get interval for downsampling from config
+        interval_seconds = self.config.get('monitor', {}).get('interval_seconds', 1800)
         chart_urls = {}
         try:
             # Outdoor charts
             if outdoor_data:
                 chart_urls['outdoor_temp'] = self.chart_generator.generate_multi_device_chart(
-                    outdoor_data, 'temperature', date_str, use_short_url=True
+                    outdoor_data, 'temperature', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
                 )
                 chart_urls['outdoor_humidity'] = self.chart_generator.generate_multi_device_chart(
-                    outdoor_data, 'humidity', date_str, use_short_url=True
+                    outdoor_data, 'humidity', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
                 )
                 logging.debug("Generated outdoor charts")
 
             # Indoor charts
             if indoor_data:
                 chart_urls['indoor_temp'] = self.chart_generator.generate_multi_device_chart(
-                    indoor_data, 'temperature', date_str, use_short_url=True
+                    indoor_data, 'temperature', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
                 )
                 chart_urls['indoor_humidity'] = self.chart_generator.generate_multi_device_chart(
-                    indoor_data, 'humidity', date_str, use_short_url=True
+                    indoor_data, 'humidity', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
                 )
                 chart_urls['co2'] = self.chart_generator.generate_multi_device_chart(
-                    indoor_data, 'co2', date_str, use_short_url=True
+                    indoor_data, 'co2', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
                 )
                 logging.debug("Generated indoor charts")
 
