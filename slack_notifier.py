@@ -440,6 +440,77 @@ class SlackNotifier:
 
         return self._send_to_channel(channel, text, blocks)
 
+    def notify_outdoor_alert(self, alert_type, message, details=None, level='info'):
+        """
+        Send outdoor weather alert to #outdoor-alert channel.
+
+        Args:
+            alert_type: Type of alert ('rain', 'wind', 'temperature', 'pressure')
+            message: Main alert message
+            details: Optional additional details
+            level: Alert level ('info', 'warning', 'danger')
+
+        Returns:
+            bool: True if sent successfully
+        """
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # Emoji and color by alert type
+        alert_config = {
+            'rain': {'emoji': '', 'color': '#3498db'},
+            'wind': {'emoji': '', 'color': '#9b59b6'},
+            'temperature_hot': {'emoji': '', 'color': '#e74c3c'},
+            'temperature_cold': {'emoji': '', 'color': '#3498db'},
+            'pressure_down': {'emoji': '', 'color': '#e67e22'},
+            'pressure_up': {'emoji': '', 'color': '#27ae60'},
+        }
+
+        # Level indicators
+        level_emoji = {
+            'info': '',
+            'warning': '',
+            'danger': ''
+        }
+
+        config = alert_config.get(alert_type, {'emoji': '', 'color': '#95a5a6'})
+        emoji = config['emoji']
+        level_indicator = level_emoji.get(level, '')
+
+        text = "{} {} {}".format(emoji, level_indicator, message) if level != 'info' else "{} {}".format(emoji, message)
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*{} {}*".format(emoji, message)
+                }
+            }
+        ]
+
+        if details:
+            blocks.append({
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": details
+                    }
+                ]
+            })
+
+        blocks.append({
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "{} | {}".format(level_indicator + ' ' + level.upper() if level != 'info' else 'INFO', timestamp)
+                }
+            ]
+        })
+
+        return self._send_to_channel('outdoor_alert', text, blocks)
+
     def notify_error(self, error_message, device_name=None, channel='home_security'):
         """
         Send error notification.

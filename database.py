@@ -754,6 +754,193 @@ class DeviceDatabase:
 
         return deleted
 
+    def get_netatmo_data_hours_ago(self, device_id, hours):
+        """
+        Get Netatmo data from approximately N hours ago.
+
+        Args:
+            device_id: Device ID
+            hours: Number of hours ago
+
+        Returns:
+            dict or None: Sensor reading closest to N hours ago
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # Get data closest to N hours ago (within 30 minutes)
+        cursor.execute('''
+            SELECT * FROM netatmo_timeseries
+            WHERE device_id = ?
+            AND recorded_at BETWEEN datetime('now', '-{} hours', '-30 minutes')
+                                AND datetime('now', '-{} hours', '+30 minutes')
+            ORDER BY ABS(julianday(recorded_at) - julianday(datetime('now', '-{} hours')))
+            LIMIT 1
+        '''.format(hours, hours, hours), (device_id,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        result = {
+            'device_id': row['device_id'],
+            'device_name': row['device_name'],
+            'recorded_at': row['recorded_at'],
+            'temperature': row['temperature'],
+            'humidity': row['humidity'],
+            'co2': row['co2'],
+            'pressure': row['pressure'],
+            'noise': row['noise'],
+        }
+        # Add wind/rain if available
+        try:
+            result['wind_strength'] = row['wind_strength']
+            result['rain'] = row['rain']
+            result['rain_24h'] = row['rain_24h']
+        except (IndexError, KeyError):
+            pass
+
+        return result
+
+    def get_netatmo_data_yesterday_same_time(self, device_id):
+        """
+        Get Netatmo data from approximately 24 hours ago (yesterday same time).
+
+        Args:
+            device_id: Device ID
+
+        Returns:
+            dict or None: Sensor reading closest to 24 hours ago
+        """
+        return self.get_netatmo_data_hours_ago(device_id, 24)
+
+    def get_netatmo_pressure_history(self, device_id, hours=6):
+        """
+        Get pressure readings for the last N hours.
+
+        Args:
+            device_id: Device ID
+            hours: Number of hours of history
+
+        Returns:
+            list: List of pressure readings with timestamps
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT recorded_at, pressure FROM netatmo_timeseries
+            WHERE device_id = ?
+            AND pressure IS NOT NULL
+            AND recorded_at >= datetime('now', '-{} hours')
+            ORDER BY recorded_at ASC
+        '''.format(hours), (device_id,))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [
+            {'recorded_at': row['recorded_at'], 'pressure': row['pressure']}
+            for row in rows
+        ]
+
+    def get_latest_netatmo_data(self, device_id):
+        """
+        Get the most recent Netatmo data for a device.
+
+        Args:
+            device_id: Device ID
+
+        Returns:
+            dict or None: Most recent sensor reading
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT * FROM netatmo_timeseries
+            WHERE device_id = ?
+            ORDER BY recorded_at DESC
+            LIMIT 1
+        ''', (device_id,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        result = {
+            'device_id': row['device_id'],
+            'device_name': row['device_name'],
+            'module_type': row['module_type'],
+            'is_outdoor': bool(row['is_outdoor']),
+            'recorded_at': row['recorded_at'],
+            'temperature': row['temperature'],
+            'humidity': row['humidity'],
+            'co2': row['co2'],
+            'pressure': row['pressure'],
+            'noise': row['noise'],
+        }
+        # Add wind/rain if available
+        try:
+            result['wind_strength'] = row['wind_strength']
+            result['gust_strength'] = row['gust_strength']
+            result['rain'] = row['rain']
+            result['rain_1h'] = row['rain_1h']
+            result['rain_24h'] = row['rain_24h']
+        except (IndexError, KeyError):
+            result['wind_strength'] = None
+            result['gust_strength'] = None
+            result['rain'] = None
+            result['rain_1h'] = None
+            result['rain_24h'] = None
+
+        return result
+
+    def get_previous_netatmo_data(self, device_id, skip=1):
+        """
+        Get the previous Netatmo data entry (for comparison).
+
+        Args:
+            device_id: Device ID
+            skip: Number of recent entries to skip (1 = get second most recent)
+
+        Returns:
+            dict or None: Previous sensor reading
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT * FROM netatmo_timeseries
+            WHERE device_id = ?
+            ORDER BY recorded_at DESC
+            LIMIT 1 OFFSET ?
+        ''', (device_id, skip))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        result = {
+            'device_id': row['device_id'],
+            'device_name': row['device_name'],
+            'recorded_at': row['recorded_at'],
+            'temperature': row['temperature'],
+            'pressure': row['pressure'],
+        }
+        try:
+            result['rain'] = row['rain']
+        except (IndexError, KeyError):
+            result['rain'] = None
+
+        return result
+
 
 if __name__ == '__main__':
     # Simple test

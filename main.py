@@ -175,6 +175,16 @@ class SwitchBotMonitor:
         # Netatmo polling tracking (separate interval)
         self.last_netatmo_poll = 0
 
+        # Outdoor alert tracking (to avoid duplicate alerts)
+        self.last_alerts = {
+            'rain': {},        # {device_id: last_alert_time}
+            'wind': {},        # {device_id: last_alert_time}
+            'temperature': {}, # {device_id: last_alert_time}
+            'pressure': {},    # {device_id: last_alert_time}
+        }
+        # Minimum interval between same type alerts (seconds)
+        self.alert_cooldown = 3600  # 1 hour
+
     def setup_webhook_server(self):
         """Setup webhook server and Cloudflare tunnel."""
         webhook_config = self.config.get('webhook', {})
@@ -459,10 +469,226 @@ class SwitchBotMonitor:
 
             logging.info("Netatmo polling complete: %d readings", len(readings))
 
+            # Check for outdoor alerts after polling
+            self.check_outdoor_alerts()
+
         except Exception as e:
             logging.error("Error polling Netatmo: %s", e)
             if self.config.get('slack', {}).get('notify_errors', False):
                 self.slack.notify_error("Netatmo: {}".format(str(e)))
+
+    def _can_send_alert(self, alert_type, device_id):
+        """Check if we can send an alert (respecting cooldown)."""
+        now = time.time()
+        last_time = self.last_alerts.get(alert_type, {}).get(device_id, 0)
+        return now - last_time >= self.alert_cooldown
+
+    def _mark_alert_sent(self, alert_type, device_id):
+        """Mark that an alert was sent."""
+        if alert_type not in self.last_alerts:
+            self.last_alerts[alert_type] = {}
+        self.last_alerts[alert_type][device_id] = time.time()
+
+    def check_outdoor_alerts(self):
+        """
+        Check Netatmo data for outdoor alert conditions.
+        Alerts:
+        - Rain started
+        - Strong wind
+        - Temperature change vs yesterday
+        - Pressure change (headache alert)
+        """
+        if not self.netatmo_api:
+            return
+
+        # Get outdoor alert channel config
+        outdoor_channel = self.config.get('slack', {}).get('channels', {}).get('outdoor_alert')
+        if not outdoor_channel:
+            logging.debug("Outdoor alert channel not configured, skipping alerts")
+            return
+
+        netatmo_devices = self.db.get_all_netatmo_devices()
+
+        for device in netatmo_devices:
+            device_id = device['device_id']
+            device_name = device['device_name']
+            module_type = device.get('module_type', '')
+
+            try:
+                # Get latest and previous data
+                latest = self.db.get_latest_netatmo_data(device_id)
+                if not latest:
+                    continue
+
+                previous = self.db.get_previous_netatmo_data(device_id)
+
+                # === Rain Alert (NAModule3) ===
+                if module_type == 'NAModule3':
+                    self._check_rain_alert(device_id, device_name, latest, previous)
+
+                # === Wind Alert (NAModule2) ===
+                if module_type == 'NAModule2':
+                    self._check_wind_alert(device_id, device_name, latest)
+
+                # === Temperature Alert (outdoor modules) ===
+                if module_type == 'NAModule1':
+                    self._check_temperature_alert(device_id, device_name, latest)
+
+                # === Pressure Alert (main station) ===
+                if module_type == 'NAMain':
+                    self._check_pressure_alert(device_id, device_name, latest)
+
+            except Exception as e:
+                logging.error("Error checking outdoor alerts for %s: %s", device_name, e)
+
+    def _check_rain_alert(self, device_id, device_name, latest, previous):
+        """Check if rain started."""
+        if not self._can_send_alert('rain', device_id):
+            return
+
+        current_rain = latest.get('rain')
+        previous_rain = previous.get('rain') if previous else None
+
+        # Rain started: was 0 (or None), now > 0
+        if current_rain is not None and current_rain > 0:
+            if previous_rain is None or previous_rain == 0:
+                message = "雨が降り始めました"
+                details = "現在の雨量: {:.1f}mm | 24h累計: {}mm".format(
+                    current_rain,
+                    latest.get('rain_24h', '-')
+                )
+                self.slack.notify_outdoor_alert('rain', message, details, level='info')
+                self._mark_alert_sent('rain', device_id)
+                logging.info("[Alert] Rain started: %s", device_name)
+
+    def _check_wind_alert(self, device_id, device_name, latest):
+        """Check for strong wind conditions."""
+        if not self._can_send_alert('wind', device_id):
+            return
+
+        wind_strength = latest.get('wind_strength')
+        gust_strength = latest.get('gust_strength')
+
+        if wind_strength is None:
+            return
+
+        # Wind thresholds (km/h) based on Japan Meteorological Agency
+        # 10m/s = 36km/h: やや強い風 (傘がさせない)
+        # 15m/s = 54km/h: 強い風 (風に向かって歩けない)
+        # 20m/s = 72km/h: 非常に強い風 (立っていられない)
+
+        message = None
+        level = 'info'
+
+        if wind_strength >= 72 or (gust_strength and gust_strength >= 72):
+            message = "非常に強い風（暴風）です"
+            level = 'danger'
+        elif wind_strength >= 54 or (gust_strength and gust_strength >= 54):
+            message = "強い風です。風に向かって歩きにくくなります"
+            level = 'warning'
+        elif wind_strength >= 36 or (gust_strength and gust_strength >= 36):
+            message = "やや強い風です。傘がさしにくくなります"
+            level = 'info'
+
+        if message:
+            details = "風速: {}km/h".format(wind_strength)
+            if gust_strength:
+                details += " | 突風: {}km/h".format(gust_strength)
+            self.slack.notify_outdoor_alert('wind', message, details, level=level)
+            self._mark_alert_sent('wind', device_id)
+            logging.info("[Alert] Strong wind: %s - %dkm/h", device_name, wind_strength)
+
+    def _check_temperature_alert(self, device_id, device_name, latest):
+        """Check temperature change vs yesterday same time."""
+        if not self._can_send_alert('temperature', device_id):
+            return
+
+        current_temp = latest.get('temperature')
+        if current_temp is None:
+            return
+
+        # Get yesterday's data at same time
+        yesterday = self.db.get_netatmo_data_yesterday_same_time(device_id)
+        if not yesterday or yesterday.get('temperature') is None:
+            return
+
+        yesterday_temp = yesterday['temperature']
+        temp_diff = current_temp - yesterday_temp
+
+        # Alert if temperature changed by 2°C or more
+        if abs(temp_diff) >= 2.0:
+            if temp_diff > 0:
+                message = "昨日より{:.1f}°C暑いです".format(temp_diff)
+                alert_type = 'temperature_hot'
+            else:
+                message = "昨日より{:.1f}°C寒いです".format(abs(temp_diff))
+                alert_type = 'temperature_cold'
+
+            details = "現在: {:.1f}°C | 昨日同時刻: {:.1f}°C".format(current_temp, yesterday_temp)
+
+            level = 'warning' if abs(temp_diff) >= 5.0 else 'info'
+            self.slack.notify_outdoor_alert(alert_type, message, details, level=level)
+            self._mark_alert_sent('temperature', device_id)
+            logging.info("[Alert] Temperature change: %s - %.1f°C diff", device_name, temp_diff)
+
+    def _check_pressure_alert(self, device_id, device_name, latest):
+        """
+        Check pressure changes for headache/weather sickness alerts.
+        Based on research:
+        - 4hPa change in 6 hours: mild warning
+        - 6hPa change in 6 hours: moderate warning (headache likely)
+        - 10hPa change in 6 hours: severe warning
+        """
+        if not self._can_send_alert('pressure', device_id):
+            return
+
+        current_pressure = latest.get('pressure')
+        if current_pressure is None:
+            return
+
+        # Get pressure from 6 hours ago
+        data_6h_ago = self.db.get_netatmo_data_hours_ago(device_id, 6)
+        if not data_6h_ago or data_6h_ago.get('pressure') is None:
+            return
+
+        pressure_6h_ago = data_6h_ago['pressure']
+        pressure_diff = current_pressure - pressure_6h_ago
+
+        # Determine alert level
+        message = None
+        level = 'info'
+        alert_type = 'pressure_down' if pressure_diff < 0 else 'pressure_up'
+
+        abs_diff = abs(pressure_diff)
+
+        if abs_diff >= 10:
+            # Severe: rapid pressure change
+            direction = "低下" if pressure_diff < 0 else "上昇"
+            message = "気圧が急激に{}しています（気象病警戒）".format(direction)
+            level = 'danger'
+        elif abs_diff >= 6:
+            # Moderate: headache likely
+            direction = "下がって" if pressure_diff < 0 else "上がって"
+            message = "気圧が{}います。頭痛に注意".format(direction)
+            level = 'warning'
+        elif abs_diff >= 4:
+            # Mild: slight warning
+            direction = "低下傾向" if pressure_diff < 0 else "上昇傾向"
+            message = "気圧が{}です".format(direction)
+            level = 'info'
+
+        if message:
+            details = "現在: {:.1f}hPa | 6時間前: {:.1f}hPa | 変化: {:+.1f}hPa".format(
+                current_pressure, pressure_6h_ago, pressure_diff
+            )
+
+            # Add low pressure warning if below 1000hPa
+            if current_pressure < 1000:
+                details += " | 低気圧"
+
+            self.slack.notify_outdoor_alert(alert_type, message, details, level=level)
+            self._mark_alert_sent('pressure', device_id)
+            logging.info("[Alert] Pressure change: %s - %.1fhPa diff", device_name, pressure_diff)
 
     def _is_sensor_device(self, device_type):
         """Check if device type is a sensor that records time series data."""
