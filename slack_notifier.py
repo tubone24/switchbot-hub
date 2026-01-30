@@ -269,16 +269,28 @@ class SlackNotifier:
             temp = device.get('temperature', {}).get('latest', '-')
             humidity = device.get('humidity', {}).get('latest', '-')
             co2 = device.get('co2', {}).get('latest', '-')
+            pressure = device.get('pressure', {}).get('latest', '-')
+            noise = device.get('noise', {}).get('latest', '-')
             is_outdoor = device.get('is_outdoor', False)
 
-            if temp != '-' or humidity != '-' or co2 != '-':
+            if temp != '-' or humidity != '-' or co2 != '-' or pressure != '-' or noise != '-':
                 parts = []
                 if temp != '-':
-                    parts.append("{}°C".format(temp))
+                    if isinstance(temp, (int, float)):
+                        parts.append("{:.1f}°C".format(temp))
+                    else:
+                        parts.append("{}°C".format(temp))
                 if humidity != '-':
                     parts.append("{}%".format(humidity))
                 if co2 != '-':
                     parts.append("{}ppm".format(co2))
+                if pressure != '-':
+                    if isinstance(pressure, (int, float)):
+                        parts.append("{:.1f}hPa".format(pressure))
+                    else:
+                        parts.append("{}hPa".format(pressure))
+                if noise != '-':
+                    parts.append("{}dB".format(noise))
                 line = "*{}*: {}".format(name, " / ".join(parts))
 
                 if is_outdoor:

@@ -82,6 +82,31 @@ class DeviceDatabase:
             ON sensor_timeseries(device_id, recorded_at)
         ''')
 
+        # Netatmo time series table (includes pressure and noise)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS netatmo_timeseries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                device_name TEXT,
+                station_name TEXT,
+                module_type TEXT,
+                is_outdoor INTEGER DEFAULT 0,
+                recorded_at TEXT NOT NULL,
+                temperature REAL,
+                humidity REAL,
+                co2 INTEGER,
+                pressure REAL,
+                noise INTEGER,
+                battery_percent INTEGER
+            )
+        ''')
+
+        # Index for Netatmo time series queries
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_netatmo_timeseries_device_date
+            ON netatmo_timeseries(device_id, recorded_at)
+        ''')
+
         conn.commit()
         conn.close()
 
@@ -501,6 +526,151 @@ class DeviceDatabase:
 
         cursor.execute('''
             DELETE FROM sensor_timeseries
+            WHERE recorded_at < datetime('now', '-{} days')
+        '''.format(int(days)))
+
+        deleted = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        return deleted
+
+    # ========== Netatmo Time Series Methods ==========
+
+    def save_netatmo_data(self, device_id, device_name, station_name, module_type,
+                          is_outdoor, temperature=None, humidity=None, co2=None,
+                          pressure=None, noise=None, battery_percent=None):
+        """
+        Save Netatmo sensor time series data.
+
+        Args:
+            device_id: Netatmo device/module ID (MAC address)
+            device_name: Device/module name
+            station_name: Station name
+            module_type: Module type (NAMain, NAModule1, etc.)
+            is_outdoor: Whether this is an outdoor module
+            temperature: Temperature in Celsius
+            humidity: Humidity percentage
+            co2: CO2 in ppm
+            pressure: Pressure in mbar
+            noise: Noise level in dB
+            battery_percent: Battery percentage
+
+        Returns:
+            bool: True if data was saved
+        """
+        # Only save if there's any sensor data
+        if temperature is None and humidity is None and co2 is None and pressure is None and noise is None:
+            return False
+
+        now = datetime.utcnow().isoformat()
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            INSERT INTO netatmo_timeseries
+            (device_id, device_name, station_name, module_type, is_outdoor,
+             recorded_at, temperature, humidity, co2, pressure, noise, battery_percent)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (device_id, device_name, station_name, module_type, 1 if is_outdoor else 0,
+              now, temperature, humidity, co2, pressure, noise, battery_percent))
+
+        conn.commit()
+        conn.close()
+
+        return True
+
+    def get_netatmo_data_for_date(self, device_id, date_str=None):
+        """
+        Get Netatmo sensor data for a specific date.
+
+        Args:
+            device_id: Device ID
+            date_str: Date string (YYYY-MM-DD), defaults to today
+
+        Returns:
+            list: List of sensor readings for the day
+        """
+        if date_str is None:
+            date_str = datetime.utcnow().strftime('%Y-%m-%d')
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT * FROM netatmo_timeseries
+            WHERE device_id = ?
+            AND date(recorded_at) = date(?)
+            ORDER BY recorded_at ASC
+        ''', (device_id, date_str))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [
+            {
+                'device_id': row['device_id'],
+                'device_name': row['device_name'],
+                'station_name': row['station_name'],
+                'module_type': row['module_type'],
+                'is_outdoor': bool(row['is_outdoor']),
+                'recorded_at': row['recorded_at'],
+                'temperature': row['temperature'],
+                'humidity': row['humidity'],
+                'co2': row['co2'],
+                'pressure': row['pressure'],
+                'noise': row['noise'],
+                'battery_percent': row['battery_percent']
+            }
+            for row in rows
+        ]
+
+    def get_all_netatmo_devices(self):
+        """
+        Get list of Netatmo devices with sensor data.
+
+        Returns:
+            list: List of device info dicts
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT DISTINCT device_id, device_name, station_name, module_type, is_outdoor
+            FROM netatmo_timeseries
+            ORDER BY station_name, device_name
+        ''')
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [
+            {
+                'device_id': row['device_id'],
+                'device_name': row['device_name'],
+                'station_name': row['station_name'],
+                'module_type': row['module_type'],
+                'is_outdoor': bool(row['is_outdoor'])
+            }
+            for row in rows
+        ]
+
+    def cleanup_old_netatmo_data(self, days=7):
+        """
+        Remove Netatmo time series data older than specified days.
+
+        Args:
+            days: Number of days to keep
+
+        Returns:
+            int: Number of deleted records
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            DELETE FROM netatmo_timeseries
             WHERE recorded_at < datetime('now', '-{} days')
         '''.format(int(days)))
 

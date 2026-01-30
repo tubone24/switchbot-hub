@@ -1,18 +1,36 @@
-# SwitchBot Hub Monitor
+# SwitchBot & Netatmo Hub Monitor
 
-SwitchBotデバイスの状態を監視し、変化があればSlackに通知するツールです。
+SwitchBotデバイスとNetatmo Weather Stationの状態を監視し、変化があればSlackに通知するツールです。
 
 <img width="652" height="582" alt="スクリーンショット 2026-01-30 11 09 42" src="https://github.com/user-attachments/assets/e5ddebe0-bcdb-4fd1-bc40-e2021252cba1" />
 
 
 ## 特徴
 
+- **マルチプラットフォーム監視**: SwitchBotとNetatmoを一元管理
 - **ハイブリッド監視**: ポーリング方式とWebhook方式を組み合わせ
 - **複数Slackチャンネル対応**: 防犯/環境更新/グラフを別チャンネルに通知
 - **日本語通知**: セキュリティイベントは「解錠されました」などわかりやすく通知
-- **5分ごとのグラフレポート**: 温湿度・CO2を屋外/屋内で分けてグラフ化
+- **5分ごとのグラフレポート**: 温湿度・CO2・気圧・騒音を屋外/屋内で分けてグラフ化
 - **Quick Tunnel対応**: ドメイン不要でWebhook受信可能（URLは自動更新）
 - **JST表示**: グラフの時間軸は日本時間
+
+## 対応デバイス
+
+### SwitchBot
+- 温湿度計（Meter, MeterPlus, MeterPro）
+- CO2センサー（MeterPro CO2）
+- 防水温湿度計（Outdoor Meter）
+- Hub 2
+- スマートロック
+- 開閉センサー
+- モーションセンサー
+- ドアベル
+
+### Netatmo Weather Station
+- メインステーション（温度・湿度・CO2・気圧・騒音）
+- 屋外モジュール（温度・湿度）
+- 追加室内モジュール（温度・湿度・CO2）
 
 ## Slack通知チャンネル
 
@@ -28,6 +46,7 @@ SwitchBotデバイスの状態を監視し、変化があればSlackに通知す
 - requests ライブラリ
 - SwitchBot Hub (Hub Mini, Hub 2など)
 - cloudflared (Webhook使用時)
+- Netatmo Weather Station（オプション）
 
 ## クイックスタート
 
@@ -38,7 +57,19 @@ SwitchBotデバイスの状態を監視し、変化があればSlackに通知す
 3. **開発者オプション** が表示される
 4. **トークン** と **シークレットキー** を取得
 
-### 2. Slack Incoming Webhookの設定
+### 2. Netatmo API認証情報の取得（オプション）
+
+1. [Netatmo Connect](https://dev.netatmo.com/) にアクセス
+2. **Create an App** でアプリを作成
+   - App Name: 任意の名前
+   - Description: 任意の説明
+   - Data Protection Officer: 自分の名前とメールアドレス
+3. **Client ID** と **Client Secret** を保存
+4. OAuth2認証を完了してリフレッシュトークンを取得:
+   - Netatmoの[認証ドキュメント](https://dev.netatmo.com/apidocumentation/oauth)を参照
+   - スコープ: `read_station`
+
+### 3. Slack Incoming Webhookの設定
 
 3つのチャンネル用にWebhook URLを取得:
 
@@ -49,7 +80,7 @@ SwitchBotデバイスの状態を監視し、変化があればSlackに通知す
    - `#atmos-update` (環境変化通知)
    - `#atmos-graph` (グラフレポート)
 
-### 3. cloudflaredのインストール（Raspberry Pi）
+### 4. cloudflaredのインストール（Raspberry Pi）
 
 ```bash
 # ARM版をダウンロード
@@ -61,7 +92,7 @@ sudo chmod +x /usr/local/bin/cloudflared
 cloudflared --version
 ```
 
-### 4. 設定ファイルの作成
+### 5. 設定ファイルの作成
 
 ```bash
 cp config.json.example config.json
@@ -74,6 +105,14 @@ cp config.json.example config.json
     "switchbot": {
         "token": "YOUR_SWITCHBOT_API_TOKEN",
         "secret": "YOUR_SWITCHBOT_API_SECRET"
+    },
+    "netatmo": {
+        "enabled": true,
+        "client_id": "YOUR_NETATMO_CLIENT_ID",
+        "client_secret": "YOUR_NETATMO_CLIENT_SECRET",
+        "refresh_token": "YOUR_NETATMO_REFRESH_TOKEN",
+        "credentials_file": null,
+        "interval_seconds": 600
     },
     "slack": {
         "channels": {
@@ -103,7 +142,8 @@ cp config.json.example config.json
     "database": {
         "path": "device_states.db",
         "history_days": 30,
-        "sensor_data_days": 7
+        "sensor_data_days": 7,
+        "netatmo_data_days": 7
     },
     "graph_report": {
         "enabled": true,
@@ -116,7 +156,7 @@ cp config.json.example config.json
 }
 ```
 
-### 5. 実行
+### 6. 実行
 
 ```bash
 pip install requests
@@ -131,6 +171,21 @@ python main.py
 |------|------|
 | `token` | SwitchBot APIトークン |
 | `secret` | SwitchBot APIシークレットキー |
+
+### netatmo
+
+| 項目 | 説明 |
+|------|------|
+| `enabled` | Netatmo監視の有効/無効 |
+| `client_id` | Netatmoアプリのクライアントid |
+| `client_secret` | Netatmoアプリのクライアントシークレット |
+| `refresh_token` | OAuth2リフレッシュトークン |
+| `credentials_file` | リフレッシュトークン永続化ファイルパス（オプション） |
+| `interval_seconds` | ポーリング間隔（秒）。デフォルト600秒（10分） |
+
+**credentials_file について:**
+
+Netatmoはリフレッシュトークンが定期的に更新されます。`credentials_file` を指定すると、更新されたトークンを自動で保存します。指定しない場合、長期間実行していると認証が切れる可能性があります。
 
 ### slack
 
@@ -147,7 +202,7 @@ python main.py
 
 | 項目 | 説明 |
 |------|------|
-| `interval_seconds` | ポーリング間隔（秒）。デフォルト1800秒（30分） |
+| `interval_seconds` | SwitchBotポーリング間隔（秒）。デフォルト1800秒（30分） |
 | `ignore_devices` | 監視しないデバイス名のリスト（部分一致） |
 | `polling_devices` | ポーリングで監視するデバイス名のリスト（部分一致） |
 
@@ -186,7 +241,8 @@ python main.py
 |------|------|
 | `path` | SQLiteデータベースファイルパス |
 | `history_days` | 状態変更履歴の保持日数 |
-| `sensor_data_days` | センサー時系列データの保持日数（デフォルト7日） |
+| `sensor_data_days` | SwitchBotセンサー時系列データの保持日数（デフォルト7日） |
+| `netatmo_data_days` | Netatmo時系列データの保持日数（デフォルト7日） |
 
 ### graph_report
 
@@ -210,18 +266,35 @@ python main.py
 
 | グラフ | 内容 |
 |-------|------|
-| 🌳 屋外 温度 | 防水温湿度計の温度推移 |
-| 🌳 屋外 湿度 | 防水温湿度計の湿度推移 |
+| 🌳 屋外 温度 | 屋外センサーの温度推移 |
+| 🌳 屋外 湿度 | 屋外センサーの湿度推移 |
 | 🏠 屋内 温度 | 室内センサーの温度推移（複数デバイス色分け） |
 | 🏠 屋内 湿度 | 室内センサーの湿度推移（複数デバイス色分け） |
 | 🏠 CO2濃度 | 室内のCO2推移（1000ppm/1500ppmしきい値ライン付き） |
 
+### デバイス名のプレフィックス
+
+グラフでは、デバイスのソースがわかるようにプレフィックスが付きます：
+
+| プレフィックス | ソース |
+|--------------|--------|
+| `[SB]` | SwitchBot |
+| `[NA]` | Netatmo |
+
 ### 屋外センサーの判定
 
-デバイス名に以下のキーワードが含まれる場合、屋外センサーとして扱います：
+**SwitchBot:** デバイス名に以下のキーワードが含まれる場合、屋外センサーとして扱います：
 - `防水温湿度計`
 - `屋外`
 - `Outdoor`
+
+**Netatmo:** モジュールタイプが `NAModule1`（屋外モジュール）の場合、自動的に屋外として判定されます。
+
+### Netatmo固有の計測値
+
+Netatmoセンサーはサマリーで以下の追加情報を表示します：
+- **気圧（hPa）**: メインステーションのみ
+- **騒音（dB）**: メインステーションのみ
 
 ### タイムゾーン
 
@@ -242,25 +315,35 @@ python main.py
 
 ```mermaid
 flowchart TB
-    subgraph main["main.py (SwitchBotMonitor)"]
+    subgraph main["main.py (Monitor)"]
         direction TB
 
         subgraph input["データ収集"]
-            polling["Polling<br/>30分間隔<br/>センサーデータ取得"]
+            sbPolling["SwitchBot Polling<br/>30分間隔"]
+            naPolling["Netatmo Polling<br/>10分間隔"]
             webhook["Webhook Server<br/>port 8080<br/>リアルタイム受信"]
         end
 
         cf["Cloudflare<br/>Quick Tunnel"] --> webhook
 
-        polling --> db
+        sbPolling --> db
+        naPolling --> db
         webhook --> db
 
-        db["database.py (SQLite)<br/>状態保存 / 変更検出 / センサー時系列データ蓄積"]
+        db["database.py (SQLite)<br/>状態保存 / 変更検出<br/>SwitchBot時系列 / Netatmo時系列"]
 
         db --> security["#home-security<br/>防犯通知（日本語）"]
         db --> atmos["#atmos-update<br/>環境変化通知"]
         db --> atmosGraph["#atmos-graph<br/>5分ごとグラフ"]
     end
+
+    subgraph external["外部API"]
+        sbAPI["SwitchBot API<br/>v1.1"]
+        naAPI["Netatmo API<br/>OAuth2"]
+    end
+
+    sbAPI --> sbPolling
+    naAPI --> naPolling
 ```
 
 ## Supervisorでサービス化
@@ -286,10 +369,15 @@ sudo supervisorctl start switchbot-monitor
 
 ## API制限について
 
-SwitchBot APIは **1日10,000リクエスト** の制限があります。
-
+### SwitchBot
+- **1日10,000リクエスト** の制限
 - Webhookはサーバー側からのPush通知なのでAPI制限にカウントされない
 - ポーリング対象を減らせばAPI使用量を大幅に削減可能
+
+### Netatmo
+- **APIリクエスト制限あり**（公式ドキュメント参照）
+- デフォルト10分間隔でのポーリングを推奨
+- アクセストークンは3時間で期限切れ（自動更新）
 
 ## ファイル構成
 
@@ -297,6 +385,7 @@ SwitchBot APIは **1日10,000リクエスト** の制限があります。
 switchbot-hub/
 ├── main.py                 # メインエントリーポイント
 ├── switchbot_api.py        # SwitchBot API v1.1クライアント
+├── netatmo_api.py          # Netatmo Weather Station APIクライアント
 ├── database.py             # SQLite状態管理・時系列データ
 ├── slack_notifier.py       # Slack通知（複数チャンネル対応）
 ├── webhook_server.py       # HTTPサーバー（Webhook受信）
