@@ -2,6 +2,9 @@
 
 SwitchBotデバイスの状態を監視し、変化があればSlackに通知するツールです。
 
+<img width="652" height="582" alt="スクリーンショット 2026-01-30 11 09 42" src="https://github.com/user-attachments/assets/e5ddebe0-bcdb-4fd1-bc40-e2021252cba1" />
+
+
 ## 特徴
 
 - **ハイブリッド監視**: ポーリング方式とWebhook方式を組み合わせ
