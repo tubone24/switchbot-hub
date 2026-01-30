@@ -97,21 +97,19 @@ def downsample_sensor_data(sensor_data, interval_seconds):
 
 def utc_to_jst(time_str):
     """
-    Convert UTC time string (HH:MM) to JST (UTC+9).
+    Extract time string in HH:MM format.
+
+    Note: Data is now stored in local time, so no conversion is needed.
+    Function name kept for compatibility.
 
     Args:
-        time_str: Time in HH:MM format (UTC)
+        time_str: Time in HH:MM format
 
     Returns:
-        str: Time in HH:MM format (JST)
+        str: Time in HH:MM format
     """
-    try:
-        hour, minute = map(int, time_str.split(':'))
-        # Add 9 hours for JST
-        hour = (hour + 9) % 24
-        return '{:02d}:{:02d}'.format(hour, minute)
-    except (ValueError, AttributeError):
-        return time_str
+    # Data is already in local time, no conversion needed
+    return time_str
 
 
 class ChartGenerator:
