@@ -15,7 +15,8 @@
         "channels": {
             "home_security": "https://hooks.slack.com/services/YOUR/SECURITY/WEBHOOK",
             "atmos_update": "https://hooks.slack.com/services/YOUR/ATMOS/WEBHOOK",
-            "atmos_graph": "https://hooks.slack.com/services/YOUR/GRAPH/WEBHOOK"
+            "atmos_graph": "https://hooks.slack.com/services/YOUR/GRAPH/WEBHOOK",
+            "outdoor_alert": "https://hooks.slack.com/services/YOUR/OUTDOOR/WEBHOOK"
         },
         "enabled": true,
         "notify_startup": true,
