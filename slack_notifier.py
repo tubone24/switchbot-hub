@@ -135,8 +135,11 @@ class SlackNotifier:
 
         # Motion Sensor
         if device_type == 'Motion Sensor':
-            detected = status.get('moveDetected', False)
-            if detected:
+            # Check both formats: API status uses 'moveDetected', Webhook uses 'detectionState'
+            detection_state = status.get('detectionState', '')
+            move_detected = status.get('moveDetected', False)
+
+            if detection_state == 'DETECTED' or move_detected:
                 return "{}が動きを検知しました".format(device_name)
             else:
                 return "{}の動き検知がクリアされました".format(device_name)
@@ -167,14 +170,14 @@ class SlackNotifier:
         emoji = ""
         if 'Lock' in device_type:
             lock_state = status.get('lockState', '')
-            emoji = "" if lock_state == 'locked' else ""
+            emoji = "🔒" if lock_state == 'locked' else "🔓"
         elif device_type == 'Contact Sensor':
             open_state = status.get('openState', '')
-            emoji = "" if open_state == 'open' else ""
+            emoji = "🚪" if open_state == 'open' else "✅"
         elif device_type == 'Motion Sensor':
-            emoji = ""
+            emoji = "👁️"
         elif device_type == 'Video Doorbell':
-            emoji = ""
+            emoji = "🔔"
 
         text = "{} {}".format(emoji, message_ja)
 
