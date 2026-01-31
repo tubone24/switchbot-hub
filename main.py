@@ -841,8 +841,8 @@ class SwitchBotMonitor:
             return
 
         # Generate charts
-        # Get interval for downsampling from config
-        interval_seconds = self.config.get('monitor', {}).get('interval_seconds', 1800)
+        # Get interval for downsampling from graph_report config (default: 10 minutes)
+        interval_seconds = self.config.get('graph_report', {}).get('downsample_seconds', 600)
         chart_urls = {}
         try:
             # Outdoor charts (temperature, humidity)
