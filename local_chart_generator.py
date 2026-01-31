@@ -308,7 +308,7 @@ class LocalChartGenerator:
         else:
             ax.xaxis.set_major_locator(mdates.AutoDateLocator())
 
-    def generate_multi_device_chart(self, devices_data, metric, date_str, interval_seconds=None, hours_range=None):
+    def generate_multi_device_chart(self, devices_data, metric, date_str, interval_seconds=None, hours_range=None, chart_type=None):
         """
         Generate chart comparing multiple devices.
 
@@ -318,6 +318,7 @@ class LocalChartGenerator:
             date_str: Date string for title
             interval_seconds: Interval for downsampling
             hours_range: Number of hours to include (e.g., 12 or 24). None for all data.
+            chart_type: Optional chart type identifier for unique filename (e.g., 'outdoor', 'indoor')
 
         Returns:
             str: Path to generated chart image
@@ -435,7 +436,8 @@ class LocalChartGenerator:
 
         # Save to file
         hours_suffix = '_{}h'.format(hours_range) if hours_range else ''
-        filename = 'chart_{}{}_{}.png'.format(metric, hours_suffix, date_str.replace('/', '-'))
+        type_prefix = '{}_'.format(chart_type) if chart_type else ''
+        filename = 'chart_{}{}{}_{}.png'.format(type_prefix, metric, hours_suffix, date_str.replace('/', '-'))
         filepath = os.path.join(self.output_dir, filename)
         fig.savefig(filepath, dpi=self.dpi, bbox_inches='tight', facecolor='white')
         plt.close(fig)
@@ -1082,34 +1084,41 @@ def generate_and_upload_charts(
         # Outdoor charts
         if outdoor_data:
             chart_paths['outdoor_temp'] = generator.generate_multi_device_chart(
-                outdoor_data, 'temperature', date_str, interval_seconds=interval_seconds
+                outdoor_data, 'temperature', date_str, interval_seconds=interval_seconds,
+                chart_type='outdoor'
             )
             chart_paths['outdoor_humidity'] = generator.generate_multi_device_chart(
-                outdoor_data, 'humidity', date_str, interval_seconds=interval_seconds
+                outdoor_data, 'humidity', date_str, interval_seconds=interval_seconds,
+                chart_type='outdoor'
             )
 
         # Indoor charts
         if indoor_data:
             chart_paths['indoor_temp'] = generator.generate_multi_device_chart(
-                indoor_data, 'temperature', date_str, interval_seconds=interval_seconds
+                indoor_data, 'temperature', date_str, interval_seconds=interval_seconds,
+                chart_type='indoor'
             )
             chart_paths['indoor_humidity'] = generator.generate_multi_device_chart(
-                indoor_data, 'humidity', date_str, interval_seconds=interval_seconds
+                indoor_data, 'humidity', date_str, interval_seconds=interval_seconds,
+                chart_type='indoor'
             )
             chart_paths['co2'] = generator.generate_multi_device_chart(
-                indoor_data, 'co2', date_str, interval_seconds=interval_seconds
+                indoor_data, 'co2', date_str, interval_seconds=interval_seconds,
+                chart_type='indoor'
             )
 
         # Pressure chart
         if pressure_data:
             chart_paths['pressure'] = generator.generate_multi_device_chart(
-                pressure_data, 'pressure', date_str, interval_seconds=interval_seconds
+                pressure_data, 'pressure', date_str, interval_seconds=interval_seconds,
+                chart_type='pressure'
             )
 
         # Noise chart
         if noise_data:
             chart_paths['noise'] = generator.generate_multi_device_chart(
-                noise_data, 'noise', date_str, interval_seconds=interval_seconds
+                noise_data, 'noise', date_str, interval_seconds=interval_seconds,
+                chart_type='noise'
             )
 
         # Wind charts

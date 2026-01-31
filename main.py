@@ -1070,40 +1070,40 @@ class SwitchBotMonitor:
                 if outdoor_data:
                     chart_paths['outdoor_temp' + suffix] = self.local_chart_generator.generate_multi_device_chart(
                         outdoor_data, 'temperature', date_str,
-                        interval_seconds=interval, hours_range=hours
+                        interval_seconds=interval, hours_range=hours, chart_type='outdoor'
                     )
                     chart_paths['outdoor_humidity' + suffix] = self.local_chart_generator.generate_multi_device_chart(
                         outdoor_data, 'humidity', date_str,
-                        interval_seconds=interval, hours_range=hours
+                        interval_seconds=interval, hours_range=hours, chart_type='outdoor'
                     )
 
                 # Indoor charts
                 if indoor_data:
                     chart_paths['indoor_temp' + suffix] = self.local_chart_generator.generate_multi_device_chart(
                         indoor_data, 'temperature', date_str,
-                        interval_seconds=interval, hours_range=hours
+                        interval_seconds=interval, hours_range=hours, chart_type='indoor'
                     )
                     chart_paths['indoor_humidity' + suffix] = self.local_chart_generator.generate_multi_device_chart(
                         indoor_data, 'humidity', date_str,
-                        interval_seconds=interval, hours_range=hours
+                        interval_seconds=interval, hours_range=hours, chart_type='indoor'
                     )
                     chart_paths['co2' + suffix] = self.local_chart_generator.generate_multi_device_chart(
                         indoor_data, 'co2', date_str,
-                        interval_seconds=interval, hours_range=hours
+                        interval_seconds=interval, hours_range=hours, chart_type='indoor'
                     )
 
                 # Pressure chart
                 if pressure_data:
                     chart_paths['pressure' + suffix] = self.local_chart_generator.generate_multi_device_chart(
                         pressure_data, 'pressure', date_str,
-                        interval_seconds=interval, hours_range=hours
+                        interval_seconds=interval, hours_range=hours, chart_type='pressure'
                     )
 
                 # Noise chart
                 if noise_data:
                     chart_paths['noise' + suffix] = self.local_chart_generator.generate_multi_device_chart(
                         noise_data, 'noise', date_str,
-                        interval_seconds=interval, hours_range=hours
+                        interval_seconds=interval, hours_range=hours, chart_type='noise'
                     )
 
                 # Wind charts
