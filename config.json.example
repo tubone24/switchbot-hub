@@ -12,6 +12,7 @@
         "interval_seconds": 600
     },
     "slack": {
+        "bot_token": null,
         "channels": {
             "home_security": "https://hooks.slack.com/services/YOUR/SECURITY/WEBHOOK",
             "atmos_update": "https://hooks.slack.com/services/YOUR/ATMOS/WEBHOOK",
@@ -63,7 +64,9 @@
     },
     "graph_report": {
         "enabled": true,
-        "interval_minutes": 5
+        "interval_minutes": 5,
+        "downsample_seconds": 600,
+        "use_local_chart": false
     },
     "logging": {
         "level": "INFO",

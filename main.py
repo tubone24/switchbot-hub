@@ -22,6 +22,13 @@ from webhook_server import WebhookServer, parse_webhook_event
 from cloudflare_tunnel import CloudflareTunnel
 from chart_generator import ChartGenerator
 
+# Optional: Local chart generator for Raspberry Pi (requires matplotlib)
+try:
+    from local_chart_generator import LocalChartGenerator, SlackImageUploader
+    LOCAL_CHART_AVAILABLE = True
+except ImportError:
+    LOCAL_CHART_AVAILABLE = False
+
 
 # Global flag for graceful shutdown
 running = True
@@ -168,6 +175,27 @@ class SwitchBotMonitor:
 
         # Chart generator
         self.chart_generator = ChartGenerator()
+
+        # Local chart generator (for Raspberry Pi with matplotlib)
+        graph_config = config.get('graph_report', {})
+        self.use_local_chart = graph_config.get('use_local_chart', False)
+        self.local_chart_generator = None
+        self.slack_uploader = None
+
+        if self.use_local_chart:
+            if LOCAL_CHART_AVAILABLE:
+                self.local_chart_generator = LocalChartGenerator()
+                bot_token = slack_config.get('bot_token')
+                channel_id = slack_config.get('channels', {}).get('atmos_graph')
+                if bot_token and channel_id:
+                    self.slack_uploader = SlackImageUploader(bot_token, channel_id)
+                    logging.info("Local chart generator enabled (matplotlib + Slack file upload)")
+                else:
+                    logging.warning("Local chart enabled but bot_token or channel_id missing, falling back to URL mode")
+                    self.use_local_chart = False
+            else:
+                logging.warning("Local chart enabled but matplotlib not available, falling back to URL mode")
+                self.use_local_chart = False
 
         # Graph report tracking (5-minute interval)
         self.last_graph_report = 0
@@ -845,6 +873,16 @@ class SwitchBotMonitor:
         # Generate charts
         # Get interval for downsampling from graph_report config (default: 10 minutes)
         interval_seconds = self.config.get('graph_report', {}).get('downsample_seconds', 600)
+
+        # Use local chart generator if enabled (Raspberry Pi mode)
+        if self.use_local_chart and self.local_chart_generator and self.slack_uploader:
+            self._send_local_chart_report(
+                outdoor_data, indoor_data, wind_data, rain_data,
+                pressure_data, noise_data, date_str, interval_seconds
+            )
+            return
+
+        # Default: Use QuickChart.io URL mode
         chart_urls = {}
         try:
             # Outdoor charts (temperature, humidity)
@@ -921,6 +959,90 @@ class SwitchBotMonitor:
             logging.info("Sent graph report to #atmos-graph")
         except Exception as e:
             logging.error("Error sending graph report: %s", e)
+
+    def _send_local_chart_report(self, outdoor_data, indoor_data, wind_data, rain_data,
+                                  pressure_data, noise_data, date_str, interval_seconds):
+        """
+        Generate charts locally using matplotlib and upload to Slack.
+        Used for Raspberry Pi deployment where QuickChart.io may be unreliable.
+        """
+        logging.info("Generating local charts with matplotlib...")
+
+        chart_paths = {}
+        try:
+            # Outdoor charts
+            if outdoor_data:
+                chart_paths['outdoor_temp'] = self.local_chart_generator.generate_multi_device_chart(
+                    outdoor_data, 'temperature', date_str, interval_seconds=interval_seconds
+                )
+                chart_paths['outdoor_humidity'] = self.local_chart_generator.generate_multi_device_chart(
+                    outdoor_data, 'humidity', date_str, interval_seconds=interval_seconds
+                )
+                logging.debug("Generated local outdoor charts")
+
+            # Indoor charts
+            if indoor_data:
+                chart_paths['indoor_temp'] = self.local_chart_generator.generate_multi_device_chart(
+                    indoor_data, 'temperature', date_str, interval_seconds=interval_seconds
+                )
+                chart_paths['indoor_humidity'] = self.local_chart_generator.generate_multi_device_chart(
+                    indoor_data, 'humidity', date_str, interval_seconds=interval_seconds
+                )
+                chart_paths['co2'] = self.local_chart_generator.generate_multi_device_chart(
+                    indoor_data, 'co2', date_str, interval_seconds=interval_seconds
+                )
+                logging.debug("Generated local indoor charts")
+
+            # Pressure chart
+            if pressure_data:
+                chart_paths['pressure'] = self.local_chart_generator.generate_multi_device_chart(
+                    pressure_data, 'pressure', date_str, interval_seconds=interval_seconds
+                )
+                logging.debug("Generated local pressure chart")
+
+            # Noise chart
+            if noise_data:
+                chart_paths['noise'] = self.local_chart_generator.generate_multi_device_chart(
+                    noise_data, 'noise', date_str, interval_seconds=interval_seconds
+                )
+                logging.debug("Generated local noise chart")
+
+            # Wind charts
+            if wind_data:
+                chart_paths['wind'] = self.local_chart_generator.generate_wind_chart(
+                    wind_data, date_str, interval_seconds=interval_seconds
+                )
+                chart_paths['wind_direction'] = self.local_chart_generator.generate_wind_direction_chart(
+                    wind_data, date_str, interval_seconds=interval_seconds
+                )
+                logging.debug("Generated local wind charts")
+
+            # Rain chart
+            if rain_data:
+                chart_paths['rain'] = self.local_chart_generator.generate_rain_chart(
+                    rain_data, date_str, interval_seconds=interval_seconds
+                )
+                logging.debug("Generated local rain chart")
+
+        except Exception as e:
+            logging.error("Error generating local charts: %s", e)
+            return
+
+        # Upload to Slack
+        try:
+            results = self.slack_uploader.upload_charts(chart_paths, date_str)
+            success_count = sum(1 for v in results.values() if v)
+            total_count = len(results)
+            logging.info("Uploaded %d/%d charts to Slack", success_count, total_count)
+        except Exception as e:
+            logging.error("Error uploading charts to Slack: %s", e)
+            # Cleanup any remaining files
+            for path in chart_paths.values():
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
 
     def check_graph_report(self):
         """Check if it's time to send graph report (every N minutes)."""

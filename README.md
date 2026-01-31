@@ -12,6 +12,7 @@ SwitchBotデバイスとNetatmo Weather Stationの状態を監視し、変化が
 - **複数Slackチャンネル対応**: 防犯/環境更新/グラフを別チャンネルに通知
 - **日本語通知**: セキュリティイベントは「解錠されました」などわかりやすく通知
 - **5分ごとのグラフレポート**: 温湿度・CO2・気圧・騒音を屋外/屋内で分けてグラフ化
+- **ローカルチャート生成**: Raspberry Pi向けにmatplotlibでローカル生成＋Slackファイルアップロード対応
 - **Quick Tunnel対応**: ドメイン不要でWebhook受信可能（URLは自動更新）
 - **JST表示**: グラフの時間軸は日本時間
 
@@ -50,6 +51,7 @@ SwitchBotデバイスとNetatmo Weather Stationの状態を監視し、変化が
 - SwitchBot Hub (Hub Mini, Hub 2など)
 - cloudflared (Webhook使用時)
 - Netatmo Weather Station（オプション）
+- matplotlib 3.5.3（ローカルチャート生成時、オプション）
 
 ## クイックスタート
 
@@ -239,9 +241,10 @@ Netatmoはリフレッシュトークンが定期的に更新されます。`cre
 
 | 項目 | 説明 |
 |------|------|
+| `bot_token` | Bot User OAuth Token（ローカルチャート使用時に必要、`xoxb-...`形式） |
 | `channels.home_security` | 防犯通知用Webhook URL |
 | `channels.atmos_update` | 環境変化通知用Webhook URL |
-| `channels.atmos_graph` | グラフレポート用Webhook URL |
+| `channels.atmos_graph` | グラフレポート用Webhook URLまたはChannel ID（ローカルチャート時は`C...`形式のID） |
 | `enabled` | Slack通知の有効/無効 |
 | `notify_startup` | 起動時に通知 |
 | `notify_errors` | エラー発生時に通知 |
@@ -298,6 +301,47 @@ Netatmoはリフレッシュトークンが定期的に更新されます。`cre
 |------|------|
 | `enabled` | グラフレポートの有効/無効 |
 | `interval_minutes` | レポート送信間隔（分）。デフォルト5分 |
+| `downsample_seconds` | データのダウンサンプリング間隔（秒）。デフォルト600秒 |
+| `use_local_chart` | ローカルチャート生成を使用（Raspberry Pi向け）。デフォルト`false` |
+
+#### ローカルチャート生成（Raspberry Pi向け）
+
+`use_local_chart: true` にすると、QuickChart.io URLの代わりにmatplotlibでローカル生成し、Slackファイルアップロードで送信します。
+
+**利点:**
+- QuickChart.ioへの外部依存なし
+- ネットワーク不安定時でも確実にグラフ生成
+- 高解像度の画像
+
+**必要な設定:**
+
+```json
+{
+  "slack": {
+    "bot_token": "xoxb-your-bot-token",
+    "channels": {
+      "atmos_graph": "C0123456789"
+    }
+  },
+  "graph_report": {
+    "use_local_chart": true
+  }
+}
+```
+
+**必要なBot Tokenスコープ:**
+- `files:write` - ファイルアップロード用
+- `chat:write` - メッセージ送信用
+
+**Raspberry Piでのセットアップ:**
+
+```bash
+# 日本語フォントのインストール
+sudo apt-get install fonts-ipaexfont fonts-ipafont
+
+# Python ライブラリ（Python 3.7対応版）
+pip install matplotlib==3.5.3
+```
 
 ### logging
 
@@ -533,6 +577,7 @@ switchbot-hub/
 ├── webhook_server.py       # HTTPサーバー（Webhook受信）
 ├── cloudflare_tunnel.py    # Cloudflare Tunnel管理
 ├── chart_generator.py      # QuickChart.ioでグラフ生成
+├── local_chart_generator.py # matplotlibでローカルグラフ生成（Raspberry Pi向け）
 ├── config.json.example     # 設定サンプル
 └── config.json             # 設定ファイル（要作成）
 ```
