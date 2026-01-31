@@ -108,9 +108,10 @@ def main():
         print("Error: Client Secret is required")
         sys.exit(1)
 
-    # Use OOB (Out-of-Band) redirect for desktop apps
-    # This allows copy-pasting the code instead of setting up a local server
-    redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
+    # Use https://www.google.com as redirect URI
+    # Google recommends this for Device Access testing
+    # The authorization code will appear in the URL after redirect
+    redirect_uri = "https://www.google.com"
 
     # Generate authorization URL
     auth_url = get_authorization_url(project_id, client_id, redirect_uri)
@@ -132,10 +133,23 @@ def main():
     except Exception:
         pass
 
-    print("After authorizing, you'll see a page with an authorization code.")
+    print("After authorizing, you'll be redirected to google.com")
+    print("The URL will contain the authorization code like:")
+    print("  https://www.google.com/?code=XXXXX&scope=...")
+    print()
+    print("Copy the 'code' parameter value from the URL.")
     print()
 
     code = input("Paste the authorization code here: ").strip()
+
+    # Clean up the code if user pasted the full URL
+    if 'code=' in code:
+        # Extract code from URL
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(code)
+        params = parse_qs(parsed.query)
+        if 'code' in params:
+            code = params['code'][0]
     if not code:
         print("Error: Authorization code is required")
         sys.exit(1)
