@@ -317,18 +317,6 @@ class LocalChartGenerator:
                 for name, data in devices_data.items()
             }
 
-        # Collect all time labels
-        all_times = set()
-        for data in devices_data.values():
-            for reading in data:
-                time_str = self._parse_time(reading['recorded_at'])
-                all_times.add(time_str)
-
-        labels = sorted(list(all_times))
-
-        if not labels:
-            return None
-
         # Check if metric needs km/h to m/s conversion
         needs_wind_conversion = metric in ('wind_strength', 'gust_strength')
 
@@ -359,33 +347,34 @@ class LocalChartGenerator:
             title = '{} ({})'.format(metric_labels.get(metric, metric), time_range_str)
         fig, ax = self._setup_figure(title)
 
-        # Plot each device
+        # Collect all times for X-axis tick labels
+        all_times = set()
+
+        # Plot each device with its own time series (to avoid gaps from mismatched timestamps)
         plotted_count = 0
         for i, (device_name, data) in enumerate(devices_data.items()):
-            # Build time -> value mapping
-            time_values = {}
+            # Build time-value pairs for this device only
+            device_times = []
+            device_values = []
+
             for reading in data:
                 time_str = self._parse_time(reading['recorded_at'])
                 value = reading.get(metric)
-                if needs_wind_conversion and value is not None:
-                    value = round(value / 3.6, 1)
-                time_values[time_str] = value
+                if value is not None:
+                    if needs_wind_conversion:
+                        value = round(value / 3.6, 1)
+                    device_times.append(time_str)
+                    device_values.append(value)
+                    all_times.add(time_str)
 
-            # Build values list (None for missing times)
-            values = [time_values.get(t) for t in labels]
-
-            # Skip if all None
-            if all(v is None for v in values):
+            # Skip if no valid data
+            if not device_values:
                 continue
 
             color = self.COLORS[i % len(self.COLORS)]
 
-            # Convert None values to NaN for matplotlib to handle gaps
-            import math
-            plot_values = [v if v is not None else float('nan') for v in values]
-
             ax.plot(
-                labels, plot_values,
+                device_times, device_values,
                 label=device_name,
                 color=color,
                 linewidth=1.5,
@@ -400,10 +389,11 @@ class LocalChartGenerator:
             plt.close(fig)
             return None
 
-        # X-axis: show fewer labels if too many
-        if len(labels) > 30:
-            step = max(1, len(labels) // 20)
-            ax.set_xticks([labels[i] for i in range(0, len(labels), step)])
+        # Set X-axis ticks from all collected times
+        all_times_sorted = sorted(list(all_times))
+        if len(all_times_sorted) > 30:
+            step = max(1, len(all_times_sorted) // 20)
+            ax.set_xticks([all_times_sorted[i] for i in range(0, len(all_times_sorted), step)])
 
         ax.tick_params(axis='x', rotation=45, labelsize=9)
         ax.tick_params(axis='y', labelsize=10)
@@ -469,17 +459,6 @@ class LocalChartGenerator:
                 for name, data in devices_data.items()
             }
 
-        # Collect all time labels
-        all_times = set()
-        for data in devices_data.values():
-            for reading in data:
-                time_str = self._parse_time(reading['recorded_at'])
-                all_times.add(time_str)
-
-        labels = sorted(list(all_times))
-        if not labels:
-            return None
-
         time_range_str = '直近{}h'.format(hours_range) if hours_range else date_str
         start_date, end_date = get_date_range_from_data(devices_data)
         if start_date and end_date:
@@ -495,36 +474,48 @@ class LocalChartGenerator:
         wind_color = '#36A2EB'  # Blue
         gust_color = '#FF6384'  # Red
 
+        all_times = set()
         plotted_count = 0
+
         for device_name, data in devices_data.items():
-            time_wind = {}
-            time_gust = {}
+            # Build time-value pairs for wind and gust
+            wind_times = []
+            wind_values = []
+            gust_times = []
+            gust_values = []
+
             for reading in data:
                 time_str = self._parse_time(reading['recorded_at'])
                 wind_kmh = reading.get('wind_strength')
                 gust_kmh = reading.get('gust_strength')
-                time_wind[time_str] = round(wind_kmh / 3.6, 1) if wind_kmh is not None else None
-                time_gust[time_str] = round(gust_kmh / 3.6, 1) if gust_kmh is not None else None
+
+                if wind_kmh is not None:
+                    wind_times.append(time_str)
+                    wind_values.append(round(wind_kmh / 3.6, 1))
+                    all_times.add(time_str)
+
+                if gust_kmh is not None:
+                    gust_times.append(time_str)
+                    gust_values.append(round(gust_kmh / 3.6, 1))
+                    all_times.add(time_str)
 
             # Wind speed
-            values_wind = [time_wind.get(t) if time_wind.get(t) is not None else float('nan') for t in labels]
-            if not all(v != v for v in values_wind):  # Check if not all NaN
+            if wind_values:
                 ax.plot(
-                    labels, values_wind,
+                    wind_times, wind_values,
                     label='{} 風速'.format(device_name),
                     color=wind_color,
                     linewidth=1.5,
                     marker='o',
                     markersize=4
                 )
-                ax.fill_between(labels, values_wind, alpha=0.1, color=wind_color)
+                ax.fill_between(wind_times, wind_values, alpha=0.1, color=wind_color)
                 plotted_count += 1
 
             # Gust speed
-            values_gust = [time_gust.get(t) if time_gust.get(t) is not None else float('nan') for t in labels]
-            if not all(v != v for v in values_gust):
+            if gust_values:
                 ax.plot(
-                    labels, values_gust,
+                    gust_times, gust_values,
                     label='{} 突風'.format(device_name),
                     color=gust_color,
                     linewidth=1.5,
@@ -546,9 +537,9 @@ class LocalChartGenerator:
         ax.set_ylim(bottom=0)
         ax.set_ylabel('m/s', fontsize=11)
 
-        if len(labels) > 30:
-            step = max(1, len(labels) // 20)
-            ax.set_xticks([labels[i] for i in range(0, len(labels), step)])
+        if len(all_times_sorted) > 30:
+            step = max(1, len(all_times_sorted) // 20)
+            ax.set_xticks([all_times_sorted[i] for i in range(0, len(all_times_sorted), step)])
 
         ax.tick_params(axis='x', rotation=45, labelsize=9)
 
@@ -601,16 +592,6 @@ class LocalChartGenerator:
                 for name, data in devices_data.items()
             }
 
-        all_times = set()
-        for data in devices_data.values():
-            for reading in data:
-                time_str = self._parse_time(reading['recorded_at'])
-                all_times.add(time_str)
-
-        labels = sorted(list(all_times))
-        if not labels:
-            return None
-
         time_range_str = '直近{}h'.format(hours_range) if hours_range else date_str
         start_date, end_date = get_date_range_from_data(devices_data)
         if start_date and end_date:
@@ -623,30 +604,41 @@ class LocalChartGenerator:
             title = '風向 ({})'.format(time_range_str)
         fig, ax = self._setup_figure(title)
 
+        all_times = set()
         plotted_count = 0
+
         for i, (device_name, data) in enumerate(devices_data.items()):
-            time_angle = {}
+            # Build time-value pairs for this device
+            device_times = []
+            device_values = []
+
             for reading in data:
                 time_str = self._parse_time(reading['recorded_at'])
-                time_angle[time_str] = reading.get('wind_angle')
+                angle = reading.get('wind_angle')
+                if angle is not None:
+                    device_times.append(time_str)
+                    device_values.append(angle)
+                    all_times.add(time_str)
 
-            values = [time_angle.get(t) if time_angle.get(t) is not None else float('nan') for t in labels]
+            if not device_values:
+                continue
 
-            if not all(v != v for v in values):
-                color = self.COLORS[i % len(self.COLORS)]
-                ax.plot(
-                    labels, values,
-                    label=device_name,
-                    color=color,
-                    linewidth=1.5,
-                    marker='o',
-                    markersize=4
-                )
-                plotted_count += 1
+            color = self.COLORS[i % len(self.COLORS)]
+            ax.plot(
+                device_times, device_values,
+                label=device_name,
+                color=color,
+                linewidth=1.5,
+                marker='o',
+                markersize=4
+            )
+            plotted_count += 1
 
         if plotted_count == 0:
             plt.close(fig)
             return None
+
+        all_times_sorted = sorted(list(all_times))
 
         # Y-axis: 0-360 degrees with direction labels
         ax.set_ylim(0, 360)
@@ -659,9 +651,9 @@ class LocalChartGenerator:
 
         ax.set_ylabel('風向 (度)', fontsize=11)
 
-        if len(labels) > 30:
-            step = max(1, len(labels) // 20)
-            ax.set_xticks([labels[i] for i in range(0, len(labels), step)])
+        if len(all_times_sorted) > 30:
+            step = max(1, len(all_times_sorted) // 20)
+            ax.set_xticks([all_times_sorted[i] for i in range(0, len(all_times_sorted), step)])
 
         ax.tick_params(axis='x', rotation=45, labelsize=9)
 
