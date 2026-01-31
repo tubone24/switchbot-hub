@@ -16,6 +16,7 @@ from datetime import datetime
 
 from switchbot_api import SwitchBotAPI
 from netatmo_api import NetatmoAPI
+from google_nest_api import GoogleNestAPI
 from database import DeviceDatabase
 from slack_notifier import SlackNotifier
 from webhook_server import WebhookServer, parse_webhook_event
@@ -157,6 +158,22 @@ class SwitchBotMonitor:
             except Exception as e:
                 logging.error("Failed to initialize Netatmo API: %s", e)
 
+        # Initialize Google Nest API (optional)
+        self.nest_api = None
+        nest_config = config.get('google_nest', {})
+        if nest_config.get('enabled', False):
+            try:
+                self.nest_api = GoogleNestAPI(
+                    project_id=nest_config['project_id'],
+                    client_id=nest_config['client_id'],
+                    client_secret=nest_config['client_secret'],
+                    refresh_token=nest_config['refresh_token'],
+                    credentials_file=nest_config.get('credentials_file')
+                )
+                logging.info("Google Nest API initialized")
+            except Exception as e:
+                logging.error("Failed to initialize Google Nest API: %s", e)
+
         # Initialize database
         db_path = config.get('database', {}).get('path', 'device_states.db')
         self.db = DeviceDatabase(db_path)
@@ -202,6 +219,10 @@ class SwitchBotMonitor:
 
         # Netatmo polling tracking (separate interval)
         self.last_netatmo_poll = 0
+
+        # Google Nest polling tracking
+        self.last_nest_poll = 0
+        self.nest_device_states = {}  # Track device connectivity states
 
         # Outdoor alert tracking (to avoid duplicate alerts)
         self.last_alerts = {
@@ -513,6 +534,68 @@ class SwitchBotMonitor:
             logging.error("Error polling Netatmo: %s", e)
             if self.config.get('slack', {}).get('notify_errors', False):
                 self.slack.notify_error("Netatmo: {}".format(str(e)))
+
+    def poll_nest(self):
+        """Poll Google Nest devices for status updates."""
+        if not self.nest_api:
+            return
+
+        logging.info("Polling Google Nest devices...")
+
+        try:
+            devices = self.nest_api.poll_all_devices()
+
+            for device in devices:
+                device_id = device.get('device_id')
+                device_name = device.get('device_name', 'Unknown')
+                device_type = 'Doorbell' if device.get('is_doorbell') else 'Camera'
+                connectivity = device.get('connectivity_status', 'UNKNOWN')
+                online = device.get('online', True)
+
+                # Get previous state
+                prev_state = self.nest_device_states.get(device_id, {})
+                prev_connectivity = prev_state.get('connectivity_status')
+
+                # Save current state
+                self.nest_device_states[device_id] = {
+                    'device_name': device_name,
+                    'device_type': device_type,
+                    'connectivity_status': connectivity,
+                    'online': online,
+                    'is_doorbell': device.get('is_doorbell', False),
+                    'has_motion': device.get('has_motion', False),
+                    'has_person': device.get('has_person', False),
+                }
+
+                # Log status
+                if device.get('error'):
+                    logging.warning(
+                        "[Nest] %s: Error - %s",
+                        device_name, device.get('error')
+                    )
+                else:
+                    logging.info(
+                        "[Nest] %s (%s): connectivity=%s, motion=%s, person=%s",
+                        device_name, device_type, connectivity,
+                        device.get('has_motion'), device.get('has_person')
+                    )
+
+                # Check for connectivity changes
+                if prev_connectivity and prev_connectivity != connectivity:
+                    logging.info(
+                        "[Nest] %s connectivity changed: %s -> %s",
+                        device_name, prev_connectivity, connectivity
+                    )
+                    self.slack.notify_nest_device_status(
+                        device_name, device_type, device
+                    )
+
+            logging.info("Google Nest polling complete: %d devices", len(devices))
+
+        except Exception as e:
+            logging.error("Error polling Google Nest: %s", e)
+            if self.config.get('slack', {}).get('notify_errors', False):
+                self.slack.notify_error("Google Nest: {}".format(str(e)))
 
     def _can_send_alert(self, alert_type, device_id):
         """Check if we can send an alert (respecting cooldown)."""
@@ -1209,6 +1292,11 @@ class SwitchBotMonitor:
         if self.netatmo_api:
             logging.info("Netatmo polling interval: %d seconds", netatmo_interval)
 
+        # Get Google Nest polling interval (default: 5 minutes)
+        nest_interval = self.config.get('google_nest', {}).get('interval_seconds', 300)
+        if self.nest_api:
+            logging.info("Google Nest polling interval: %d seconds", nest_interval)
+
         # Get graph report interval
         graph_interval = self.config.get('graph_report', {}).get('interval_minutes', 5)
         logging.info("Graph report interval: %d minutes", graph_interval)
@@ -1220,6 +1308,11 @@ class SwitchBotMonitor:
         if self.netatmo_api:
             self.poll_netatmo()
             self.last_netatmo_poll = time.time()
+
+        # Initial Google Nest poll
+        if self.nest_api:
+            self.poll_nest()
+            self.last_nest_poll = time.time()
 
         # Send initial graph report immediately after first poll
         if self.config.get('graph_report', {}).get('enabled', False):
@@ -1243,6 +1336,11 @@ class SwitchBotMonitor:
             if self.netatmo_api and now - self.last_netatmo_poll >= netatmo_interval:
                 self.poll_netatmo()
                 self.last_netatmo_poll = now
+
+            # Check if it's time to poll Google Nest
+            if self.nest_api and now - self.last_nest_poll >= nest_interval:
+                self.poll_nest()
+                self.last_nest_poll = now
 
             # Check for graph report (every 5 minutes)
             self.check_graph_report()

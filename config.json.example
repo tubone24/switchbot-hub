@@ -11,6 +11,15 @@
         "credentials_file": null,
         "interval_seconds": 600
     },
+    "google_nest": {
+        "enabled": false,
+        "project_id": "YOUR_DEVICE_ACCESS_PROJECT_ID",
+        "client_id": "YOUR_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+        "client_secret": "YOUR_OAUTH_CLIENT_SECRET",
+        "refresh_token": "YOUR_REFRESH_TOKEN",
+        "credentials_file": null,
+        "interval_seconds": 300
+    },
     "slack": {
         "bot_token": null,
         "channels": {

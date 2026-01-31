@@ -26,6 +26,11 @@ class SlackNotifier:
         'WoIOSensor', 'Hub 2', 'Outdoor Meter'
     ]
 
+    # Google Nest device types
+    NEST_DEVICE_TYPES = [
+        'Doorbell', 'Camera', 'Display', 'Thermostat'
+    ]
+
     def __init__(self, config):
         """
         Initialize Slack notifier with channel configuration.
@@ -626,6 +631,199 @@ class SlackNotifier:
         })
 
         return self._send_to_channel('outdoor_alert', text, blocks)
+
+    def notify_nest_doorbell(self, device_name, event_type, event_data=None):
+        """
+        Send Google Nest doorbell/camera event notification to #home-security channel.
+
+        Args:
+            device_name: Device name
+            event_type: Event type ('chime', 'motion', 'person', 'sound')
+            event_data: Optional event data dict
+
+        Returns:
+            bool: True if sent successfully
+        """
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # Event type to Japanese message and emoji
+        event_config = {
+            'chime': {
+                'emoji': '',
+                'message': 'ドアベルが押されました',
+                'detail': 'チャイムが鳴りました'
+            },
+            'motion': {
+                'emoji': '',
+                'message': '動きを検知しました',
+                'detail': 'カメラが動きを検出'
+            },
+            'person': {
+                'emoji': '',
+                'message': '人物を検知しました',
+                'detail': '人物が検出されました'
+            },
+            'sound': {
+                'emoji': '',
+                'message': '音を検知しました',
+                'detail': '音声が検出されました'
+            },
+        }
+
+        config = event_config.get(event_type, {
+            'emoji': '',
+            'message': 'イベントが発生しました',
+            'detail': event_type
+        })
+
+        emoji = config['emoji']
+        message = config['message']
+
+        text = "{} [{}] {}".format(emoji, device_name, message)
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*{} {}*\n{}".format(emoji, message, device_name)
+                }
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "Google Nest {} | {}".format(
+                            'Doorbell' if event_type == 'chime' else 'Camera',
+                            timestamp
+                        )
+                    }
+                ]
+            }
+        ]
+
+        # Add image if available in event_data
+        if event_data and event_data.get('image_url'):
+            blocks.insert(1, {
+                "type": "image",
+                "image_url": event_data['image_url'],
+                "alt_text": "{} - {}".format(device_name, message)
+            })
+
+        return self._send_to_channel('home_security', text, blocks)
+
+    def notify_nest_camera_event(self, device_name, event_type, zone_name=None, clip_url=None):
+        """
+        Send Google Nest camera event notification.
+
+        Args:
+            device_name: Camera device name
+            event_type: Event type ('motion', 'person', 'sound')
+            zone_name: Optional activity zone name
+            clip_url: Optional clip preview URL
+
+        Returns:
+            bool: True if sent successfully
+        """
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        event_config = {
+            'motion': {'emoji': '', 'message': '動きを検知'},
+            'person': {'emoji': '', 'message': '人物を検知'},
+            'sound': {'emoji': '', 'message': '音を検知'},
+        }
+
+        config = event_config.get(event_type, {'emoji': '', 'message': event_type})
+        emoji = config['emoji']
+        message = config['message']
+
+        location_text = ''
+        if zone_name:
+            location_text = ' ({})'.format(zone_name)
+
+        text = "{} [{}] {}{}".format(emoji, device_name, message, location_text)
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*{} {}{}*\n{}".format(emoji, message, location_text, device_name)
+                }
+            }
+        ]
+
+        # Add clip link if available
+        if clip_url:
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "<{}|クリップを見る>".format(clip_url)
+                }
+            })
+
+        blocks.append({
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "Google Nest Camera | {}".format(timestamp)
+                }
+            ]
+        })
+
+        return self._send_to_channel('home_security', text, blocks)
+
+    def notify_nest_device_status(self, device_name, device_type, status):
+        """
+        Send Google Nest device status update.
+
+        Args:
+            device_name: Device name
+            device_type: Device type ('Doorbell', 'Camera')
+            status: Status dict with connectivity info
+
+        Returns:
+            bool: True if sent successfully
+        """
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        connectivity = status.get('connectivity_status', 'UNKNOWN')
+
+        if connectivity == 'OFFLINE':
+            emoji = ''
+            message = 'オフラインになりました'
+        elif connectivity == 'ONLINE':
+            emoji = ''
+            message = 'オンラインに復帰しました'
+        else:
+            emoji = ''
+            message = '状態: {}'.format(connectivity)
+
+        text = "{} [{}] {}".format(emoji, device_name, message)
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*{} {}*\n{}".format(emoji, message, device_name)
+                }
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "Google Nest {} | {}".format(device_type, timestamp)
+                    }
+                ]
+            }
+        ]
+
+        return self._send_to_channel('home_security', text, blocks)
 
     def notify_error(self, error_message, device_name=None, channel='home_security'):
         """
