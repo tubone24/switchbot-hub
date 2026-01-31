@@ -424,6 +424,9 @@ class ChartGenerator:
 
         labels = sorted(list(all_times))
 
+        # Check if metric needs km/h to m/s conversion
+        needs_wind_conversion = metric in ('wind_strength', 'gust_strength')
+
         datasets = []
         for i, (device_name, data) in enumerate(devices_data.items()):
             # Build time -> value mapping (using JST)
@@ -435,7 +438,11 @@ class ChartGenerator:
                 else:
                     time_utc = timestamp[11:16]
                 time_jst = utc_to_jst(time_utc)
-                time_values[time_jst] = reading.get(metric)
+                value = reading.get(metric)
+                # Convert km/h to m/s for wind metrics
+                if needs_wind_conversion and value is not None:
+                    value = round(value / 3.6, 1)
+                time_values[time_jst] = value
 
             # Fill data array
             values = [time_values.get(t) for t in labels]
@@ -465,8 +472,8 @@ class ChartGenerator:
             'co2': 'CO2 (ppm)',
             'pressure': '気圧 (hPa)',
             'noise': '騒音 (dB)',
-            'wind_strength': '風速 (km/h)',
-            'gust_strength': '突風 (km/h)',
+            'wind_strength': '風速 (m/s)',
+            'gust_strength': '突風 (m/s)',
             'rain': '雨量 (mm)',
             'rain_1h': '雨量/1h (mm)',
             'rain_24h': '雨量/24h (mm)'
@@ -478,8 +485,8 @@ class ChartGenerator:
             'co2': 'ppm',
             'pressure': 'hPa',
             'noise': 'dB',
-            'wind_strength': 'km/h',
-            'gust_strength': 'km/h',
+            'wind_strength': 'm/s',
+            'gust_strength': 'm/s',
             'rain': 'mm',
             'rain_1h': 'mm',
             'rain_24h': 'mm'
@@ -694,7 +701,7 @@ class ChartGenerator:
         gust_color = 'rgb(255, 99, 132)'    # Red for gust
 
         for device_name, data in devices_data.items():
-            # Build time -> value mapping
+            # Build time -> value mapping (convert km/h to m/s)
             time_wind = {}
             time_gust = {}
             time_angle = {}
@@ -705,8 +712,11 @@ class ChartGenerator:
                 else:
                     time_utc = timestamp[11:16]
                 time_jst = utc_to_jst(time_utc)
-                time_wind[time_jst] = reading.get('wind_strength')
-                time_gust[time_jst] = reading.get('gust_strength')
+                # Convert km/h to m/s (divide by 3.6)
+                wind_kmh = reading.get('wind_strength')
+                gust_kmh = reading.get('gust_strength')
+                time_wind[time_jst] = round(wind_kmh / 3.6, 1) if wind_kmh is not None else None
+                time_gust[time_jst] = round(gust_kmh / 3.6, 1) if gust_kmh is not None else None
                 time_angle[time_jst] = reading.get('wind_angle')
 
             # Wind speed
@@ -750,7 +760,7 @@ class ChartGenerator:
         options = {
             'scales': {
                 'y': {
-                    'title': {'display': True, 'text': 'km/h'},
+                    'title': {'display': True, 'text': 'm/s'},
                     'min': 0
                 }
             },
@@ -759,33 +769,33 @@ class ChartGenerator:
                     'display': True,
                     'position': 'bottom'
                 },
-                # Add threshold lines for wind warnings
+                # Add threshold lines for wind warnings (converted from km/h to m/s)
                 'annotation': {
                     'annotations': {
                         'moderate': {
                             'type': 'line',
-                            'yMin': 36,
-                            'yMax': 36,
+                            'yMin': 10,
+                            'yMax': 10,
                             'borderColor': 'rgba(255, 206, 86, 0.8)',
                             'borderWidth': 1,
                             'borderDash': [3, 3],
                             'label': {
-                                'content': 'やや強い風 (36km/h)',
+                                'content': 'やや強い風 (10m/s)',
                                 'enabled': False
                             }
                         },
                         'strong': {
                             'type': 'line',
-                            'yMin': 54,
-                            'yMax': 54,
+                            'yMin': 15,
+                            'yMax': 15,
                             'borderColor': 'orange',
                             'borderWidth': 2,
                             'borderDash': [5, 5]
                         },
                         'violent': {
                             'type': 'line',
-                            'yMin': 72,
-                            'yMax': 72,
+                            'yMin': 20,
+                            'yMax': 20,
                             'borderColor': 'red',
                             'borderWidth': 2,
                             'borderDash': [5, 5]

@@ -282,11 +282,13 @@ class SlackNotifier:
         if reading.get('noise') is not None:
             summaries.append("{}dB".format(reading['noise']))
 
-        # Wind (NAModule2)
+        # Wind (NAModule2) - convert km/h to m/s
         if reading.get('wind_strength') is not None:
-            wind_str = "風速{}km/h".format(reading['wind_strength'])
+            wind_ms = reading['wind_strength'] / 3.6
+            wind_str = "風速{:.1f}m/s".format(wind_ms)
             if reading.get('gust_strength') is not None:
-                wind_str += "(突風{}km/h)".format(reading['gust_strength'])
+                gust_ms = reading['gust_strength'] / 3.6
+                wind_str += "(突風{:.1f}m/s)".format(gust_ms)
             if reading.get('wind_angle') is not None:
                 direction = self._angle_to_direction(reading['wind_angle'])
                 wind_str = "{}{}".format(direction, wind_str)
@@ -412,11 +414,13 @@ class SlackNotifier:
                         parts.append("{}hPa".format(pressure))
                 if noise != '-':
                     parts.append("{}dB".format(noise))
-                # Wind data (only for NAModule2)
+                # Wind data (only for NAModule2) - convert km/h to m/s
                 if wind_strength != '-':
-                    wind_str = "{}km/h".format(wind_strength)
+                    wind_ms = float(wind_strength) / 3.6
+                    wind_str = "{:.1f}m/s".format(wind_ms)
                     if gust_strength != '-':
-                        wind_str += " (突風:{}km/h)".format(gust_strength)
+                        gust_ms = float(gust_strength) / 3.6
+                        wind_str += " (突風:{:.1f}m/s)".format(gust_ms)
                     parts.append(wind_str)
                 # Rain data (only for NAModule3)
                 if rain_24h != '-':
