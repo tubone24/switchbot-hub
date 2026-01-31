@@ -9,35 +9,84 @@ Prerequisites:
 1. Register for Device Access ($5 one-time fee)
    https://developers.google.com/nest/device-access/registration
 2. Create a Google Cloud Project and enable SDM API
-3. Create OAuth 2.0 Client ID (Desktop app type)
-4. Note your Device Access Project ID (UUID)
+3. Create OAuth 2.0 Client ID (Web application type)
+4. Add http://localhost:8888 to Authorized redirect URIs
+5. Note your Device Access Project ID (UUID)
 
 Usage:
     python google_nest_auth.py
-
-The script will guide you through the OAuth2 flow.
 """
 import json
 import sys
 import webbrowser
+import socket
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlencode, urlparse, parse_qs
+import threading
 
 import requests
 
 
+class OAuthCallbackHandler(BaseHTTPRequestHandler):
+    """Handle OAuth callback and extract authorization code."""
+
+    authorization_code = None
+
+    def do_GET(self):
+        """Handle GET request from OAuth redirect."""
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+
+        if 'code' in params:
+            OAuthCallbackHandler.authorization_code = params['code'][0]
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.end_headers()
+            response = """
+            <html>
+            <head><title>認証成功</title></head>
+            <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
+                <h1>認証成功!</h1>
+                <p>このウィンドウを閉じて、ターミナルに戻ってください。</p>
+            </body>
+            </html>
+            """
+            self.wfile.write(response.encode('utf-8'))
+        elif 'error' in params:
+            error = params.get('error', ['unknown'])[0]
+            error_desc = params.get('error_description', ['No description'])[0]
+            self.send_response(400)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.end_headers()
+            response = """
+            <html>
+            <head><title>認証エラー</title></head>
+            <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
+                <h1>認証エラー</h1>
+                <p>エラー: {}</p>
+                <p>{}</p>
+            </body>
+            </html>
+            """.format(error, error_desc)
+            self.wfile.write(response.encode('utf-8'))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        """Suppress HTTP server logs."""
+        pass
+
+
+def find_free_port():
+    """Find a free port on localhost."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
+
+
 def get_authorization_url(project_id, client_id, redirect_uri):
-    """
-    Generate the authorization URL for Google Nest Device Access.
-
-    Args:
-        project_id: Device Access project ID
-        client_id: OAuth2 client ID
-        redirect_uri: Redirect URI (use urn:ietf:wg:oauth:2.0:oob for desktop apps)
-
-    Returns:
-        str: Authorization URL
-    """
-    # Partner Connections Manager URL
+    """Generate the authorization URL for Google Nest Device Access."""
     base_url = "https://nestservices.google.com/partnerconnections/{}/auth".format(project_id)
 
     params = {
@@ -53,18 +102,7 @@ def get_authorization_url(project_id, client_id, redirect_uri):
 
 
 def exchange_code_for_tokens(client_id, client_secret, code, redirect_uri):
-    """
-    Exchange authorization code for access and refresh tokens.
-
-    Args:
-        client_id: OAuth2 client ID
-        client_secret: OAuth2 client secret
-        code: Authorization code from OAuth flow
-        redirect_uri: Same redirect URI used in authorization
-
-    Returns:
-        dict: Token response with access_token and refresh_token
-    """
+    """Exchange authorization code for access and refresh tokens."""
     token_url = "https://oauth2.googleapis.com/token"
 
     data = {
@@ -86,88 +124,108 @@ def main():
     print("=" * 60)
     print()
 
-    print("Before starting, make sure you have:")
-    print("1. Registered for Device Access (https://developers.google.com/nest/device-access)")
-    print("2. Created a Google Cloud Project with SDM API enabled")
-    print("3. Created OAuth 2.0 Client ID (Desktop app type)")
+    print("事前準備の確認:")
+    print("1. Device Access に登録済み ($5)")
+    print("2. Google Cloud で SDM API を有効化済み")
+    print("3. OAuth 2.0 Client ID を作成済み (Web application タイプ)")
+    print("4. Authorized redirect URIs に http://localhost:8888 を追加済み")
     print()
 
     # Get credentials from user
-    project_id = input("Enter your Device Access Project ID (UUID): ").strip()
+    project_id = input("Device Access Project ID (UUID): ").strip()
     if not project_id:
         print("Error: Project ID is required")
         sys.exit(1)
 
-    client_id = input("Enter your OAuth2 Client ID: ").strip()
+    client_id = input("OAuth2 Client ID: ").strip()
     if not client_id:
         print("Error: Client ID is required")
         sys.exit(1)
 
-    client_secret = input("Enter your OAuth2 Client Secret: ").strip()
+    client_secret = input("OAuth2 Client Secret: ").strip()
     if not client_secret:
         print("Error: Client Secret is required")
         sys.exit(1)
 
-    # Use https://www.google.com as redirect URI
-    # Google recommends this for Device Access testing
-    # The authorization code will appear in the URL after redirect
-    redirect_uri = "https://www.google.com"
+    # Use localhost redirect
+    port = 8888
+    redirect_uri = "http://localhost:{}".format(port)
+
+    print()
+    print("=" * 60)
+    print("重要: Google Cloud Console で以下を設定してください")
+    print("=" * 60)
+    print()
+    print("Authorized redirect URIs に追加:")
+    print("  {}".format(redirect_uri))
+    print()
+    input("設定が完了したら Enter を押してください...")
+
+    # Start local server
+    print()
+    print("ローカルサーバーを起動中 (port {})...".format(port))
+
+    server = HTTPServer(('localhost', port), OAuthCallbackHandler)
+    server_thread = threading.Thread(target=server.handle_request)
+    server_thread.start()
 
     # Generate authorization URL
     auth_url = get_authorization_url(project_id, client_id, redirect_uri)
 
     print()
-    print("=" * 60)
-    print("Step 1: Authorize access")
-    print("=" * 60)
-    print()
-    print("Opening browser to authorize access...")
-    print("If browser doesn't open, copy this URL:")
+    print("ブラウザで認証ページを開きます...")
+    print("自動で開かない場合は以下のURLにアクセス:")
     print()
     print(auth_url)
     print()
 
-    # Try to open browser
+    # Open browser
     try:
         webbrowser.open(auth_url)
     except Exception:
         pass
 
-    print("After authorizing, you'll be redirected to google.com")
-    print("The URL will contain the authorization code like:")
-    print("  https://www.google.com/?code=XXXXX&scope=...")
-    print()
-    print("Copy the 'code' parameter value from the URL.")
+    print("ブラウザで認証を完了してください...")
+    print("(認証後、自動的にこのスクリプトに戻ります)")
     print()
 
-    code = input("Paste the authorization code here: ").strip()
+    # Wait for callback
+    server_thread.join(timeout=300)  # 5 minute timeout
+    server.server_close()
 
-    # Clean up the code if user pasted the full URL
-    if 'code=' in code:
-        # Extract code from URL
-        from urllib.parse import urlparse, parse_qs
-        parsed = urlparse(code)
-        params = parse_qs(parsed.query)
-        if 'code' in params:
-            code = params['code'][0]
+    code = OAuthCallbackHandler.authorization_code
+
     if not code:
-        print("Error: Authorization code is required")
+        print("Error: 認証コードを取得できませんでした")
+        print()
+        print("手動で認証コードを入力してください。")
+        print("ブラウザのURLから code=XXXX の部分をコピーしてください。")
+        code = input("認証コード: ").strip()
+
+        if 'code=' in code:
+            parsed = urlparse(code)
+            params = parse_qs(parsed.query)
+            if 'code' in params:
+                code = params['code'][0]
+
+    if not code:
+        print("Error: 認証コードが必要です")
         sys.exit(1)
 
     # Exchange code for tokens
     print()
-    print("Exchanging code for tokens...")
+    print("トークンを取得中...")
 
     try:
         tokens = exchange_code_for_tokens(client_id, client_secret, code, redirect_uri)
     except requests.exceptions.HTTPError as e:
-        print("Error: Failed to exchange code for tokens")
+        print("Error: トークン取得に失敗しました")
         print("Response: {}".format(e.response.text))
         sys.exit(1)
 
     print()
     print("=" * 60)
-    print("Success! Here are your credentials:")
+    print("成功! 以下の設定を config.json に追加してください:")
     print("=" * 60)
     print()
 
@@ -183,13 +241,11 @@ def main():
         }
     }
 
-    print(json.dumps(config, indent=4))
-    print()
-    print("Copy the above configuration to your config.json file.")
+    print(json.dumps(config, indent=4, ensure_ascii=False))
     print()
 
     # Save to file option
-    save = input("Save credentials to google_nest_credentials.json? (y/n): ").strip().lower()
+    save = input("google_nest_credentials.json に保存しますか? (y/n): ").strip().lower()
     if save == 'y':
         creds = {
             'project_id': project_id,
@@ -199,12 +255,13 @@ def main():
         }
         with open('google_nest_credentials.json', 'w') as f:
             json.dump(creds, f, indent=2)
-        print("Saved to google_nest_credentials.json")
+        print("保存しました: google_nest_credentials.json")
         print()
-        print("IMPORTANT: Keep this file secure and add it to .gitignore!")
+        print("重要: このファイルには機密情報が含まれています。")
+        print("      .gitignore に追加されていることを確認してください。")
 
     print()
-    print("Setup complete!")
+    print("セットアップ完了!")
 
 
 if __name__ == '__main__':
