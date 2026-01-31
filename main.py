@@ -961,74 +961,102 @@ class SwitchBotMonitor:
             logging.error("Error sending graph report: %s", e)
 
     def _send_local_chart_report(self, outdoor_data, indoor_data, wind_data, rain_data,
-                                  pressure_data, noise_data, date_str, interval_seconds):
+                                  pressure_data, noise_data, date_str, interval_seconds,
+                                  devices_summary=None):
         """
         Generate charts locally using matplotlib and upload to Slack.
         Used for Raspberry Pi deployment where QuickChart.io may be unreliable.
+
+        Generates two sets of charts:
+        - 12h charts with current downsample interval
+        - 24h charts with 30-minute downsample interval
         """
         logging.info("Generating local charts with matplotlib...")
 
+        # Time configurations
+        # 12h: use configured interval (default 10 min)
+        # 24h: use 30 min interval
+        interval_12h = interval_seconds
+        interval_24h = 1800  # 30 minutes
+
         chart_paths = {}
         try:
-            # Outdoor charts
-            if outdoor_data:
-                chart_paths['outdoor_temp'] = self.local_chart_generator.generate_multi_device_chart(
-                    outdoor_data, 'temperature', date_str, interval_seconds=interval_seconds
-                )
-                chart_paths['outdoor_humidity'] = self.local_chart_generator.generate_multi_device_chart(
-                    outdoor_data, 'humidity', date_str, interval_seconds=interval_seconds
-                )
-                logging.debug("Generated local outdoor charts")
+            # Generate 12h and 24h charts for each metric
+            for hours, interval, suffix in [(12, interval_12h, '_12h'), (24, interval_24h, '_24h')]:
+                # Outdoor charts
+                if outdoor_data:
+                    chart_paths['outdoor_temp' + suffix] = self.local_chart_generator.generate_multi_device_chart(
+                        outdoor_data, 'temperature', date_str,
+                        interval_seconds=interval, hours_range=hours
+                    )
+                    chart_paths['outdoor_humidity' + suffix] = self.local_chart_generator.generate_multi_device_chart(
+                        outdoor_data, 'humidity', date_str,
+                        interval_seconds=interval, hours_range=hours
+                    )
 
-            # Indoor charts
-            if indoor_data:
-                chart_paths['indoor_temp'] = self.local_chart_generator.generate_multi_device_chart(
-                    indoor_data, 'temperature', date_str, interval_seconds=interval_seconds
-                )
-                chart_paths['indoor_humidity'] = self.local_chart_generator.generate_multi_device_chart(
-                    indoor_data, 'humidity', date_str, interval_seconds=interval_seconds
-                )
-                chart_paths['co2'] = self.local_chart_generator.generate_multi_device_chart(
-                    indoor_data, 'co2', date_str, interval_seconds=interval_seconds
-                )
-                logging.debug("Generated local indoor charts")
+                # Indoor charts
+                if indoor_data:
+                    chart_paths['indoor_temp' + suffix] = self.local_chart_generator.generate_multi_device_chart(
+                        indoor_data, 'temperature', date_str,
+                        interval_seconds=interval, hours_range=hours
+                    )
+                    chart_paths['indoor_humidity' + suffix] = self.local_chart_generator.generate_multi_device_chart(
+                        indoor_data, 'humidity', date_str,
+                        interval_seconds=interval, hours_range=hours
+                    )
+                    chart_paths['co2' + suffix] = self.local_chart_generator.generate_multi_device_chart(
+                        indoor_data, 'co2', date_str,
+                        interval_seconds=interval, hours_range=hours
+                    )
 
-            # Pressure chart
-            if pressure_data:
-                chart_paths['pressure'] = self.local_chart_generator.generate_multi_device_chart(
-                    pressure_data, 'pressure', date_str, interval_seconds=interval_seconds
-                )
-                logging.debug("Generated local pressure chart")
+                # Pressure chart
+                if pressure_data:
+                    chart_paths['pressure' + suffix] = self.local_chart_generator.generate_multi_device_chart(
+                        pressure_data, 'pressure', date_str,
+                        interval_seconds=interval, hours_range=hours
+                    )
 
-            # Noise chart
-            if noise_data:
-                chart_paths['noise'] = self.local_chart_generator.generate_multi_device_chart(
-                    noise_data, 'noise', date_str, interval_seconds=interval_seconds
-                )
-                logging.debug("Generated local noise chart")
+                # Noise chart
+                if noise_data:
+                    chart_paths['noise' + suffix] = self.local_chart_generator.generate_multi_device_chart(
+                        noise_data, 'noise', date_str,
+                        interval_seconds=interval, hours_range=hours
+                    )
 
-            # Wind charts
-            if wind_data:
-                chart_paths['wind'] = self.local_chart_generator.generate_wind_chart(
-                    wind_data, date_str, interval_seconds=interval_seconds
-                )
-                chart_paths['wind_direction'] = self.local_chart_generator.generate_wind_direction_chart(
-                    wind_data, date_str, interval_seconds=interval_seconds
-                )
-                logging.debug("Generated local wind charts")
+                # Wind charts
+                if wind_data:
+                    chart_paths['wind' + suffix] = self.local_chart_generator.generate_wind_chart(
+                        wind_data, date_str,
+                        interval_seconds=interval, hours_range=hours
+                    )
+                    chart_paths['wind_direction' + suffix] = self.local_chart_generator.generate_wind_direction_chart(
+                        wind_data, date_str,
+                        interval_seconds=interval, hours_range=hours
+                    )
 
-            # Rain chart
-            if rain_data:
-                chart_paths['rain'] = self.local_chart_generator.generate_rain_chart(
-                    rain_data, date_str, interval_seconds=interval_seconds
-                )
-                logging.debug("Generated local rain chart")
+                # Rain chart
+                if rain_data:
+                    chart_paths['rain' + suffix] = self.local_chart_generator.generate_rain_chart(
+                        rain_data, date_str,
+                        interval_seconds=interval, hours_range=hours
+                    )
+
+                logging.debug("Generated local %dh charts", hours)
 
         except Exception as e:
             logging.error("Error generating local charts: %s", e)
             return
 
-        # Upload to Slack
+        # Post summary text first
+        try:
+            summary_text = self._build_sensor_summary(outdoor_data, indoor_data, wind_data, rain_data)
+            if summary_text:
+                self.slack_uploader.post_message(summary_text)
+                logging.debug("Posted sensor summary to Slack")
+        except Exception as e:
+            logging.error("Error posting summary: %s", e)
+
+        # Upload charts to Slack
         try:
             results = self.slack_uploader.upload_charts(chart_paths, date_str)
             success_count = sum(1 for v in results.values() if v)
@@ -1043,6 +1071,88 @@ class SwitchBotMonitor:
                         os.remove(path)
                     except Exception:
                         pass
+
+    def _build_sensor_summary(self, outdoor_data, indoor_data, wind_data, rain_data):
+        """Build sensor summary text for Slack posting."""
+        from datetime import datetime
+        current_time = datetime.now().strftime('%H:%M')
+
+        lines = ['*環境センサーレポート ({})* '.format(current_time)]
+
+        # Outdoor section
+        if outdoor_data:
+            lines.append('*屋外*')
+            for device_name, data in outdoor_data.items():
+                if data:
+                    latest = data[-1]
+                    temp = latest.get('temperature')
+                    humidity = latest.get('humidity')
+                    co2 = latest.get('co2')
+                    pressure = latest.get('pressure')
+                    noise = latest.get('noise')
+                    wind = latest.get('wind_strength')
+                    gust = latest.get('gust_strength')
+
+                    parts = []
+                    if temp is not None:
+                        parts.append('{}°C'.format(temp))
+                    if humidity is not None:
+                        parts.append('{}%'.format(humidity))
+                    if co2 is not None:
+                        parts.append('{}ppm'.format(co2))
+                    if pressure is not None:
+                        parts.append('{}hPa'.format(pressure))
+                    if noise is not None:
+                        parts.append('{}dB'.format(noise))
+
+                    line = '{}: {}'.format(device_name, ' / '.join(parts) if parts else '-')
+                    lines.append(line)
+
+        # Wind data (separate because it's a different structure)
+        if wind_data:
+            for device_name, data in wind_data.items():
+                if data:
+                    latest = data[-1]
+                    wind_kmh = latest.get('wind_strength')
+                    gust_kmh = latest.get('gust_strength')
+                    wind_ms = round(wind_kmh / 3.6, 1) if wind_kmh else None
+                    gust_ms = round(gust_kmh / 3.6, 1) if gust_kmh else None
+
+                    if wind_ms is not None:
+                        line = '{}: {}m/s'.format(device_name, wind_ms)
+                        if gust_ms is not None:
+                            line += ' (突風:{}m/s)'.format(gust_ms)
+                        lines.append(line)
+
+        # Indoor section
+        if indoor_data:
+            lines.append('')
+            lines.append('*屋内*')
+            for device_name, data in indoor_data.items():
+                if data:
+                    latest = data[-1]
+                    temp = latest.get('temperature')
+                    humidity = latest.get('humidity')
+                    co2 = latest.get('co2')
+                    pressure = latest.get('pressure')
+                    noise = latest.get('noise')
+
+                    parts = []
+                    if temp is not None:
+                        parts.append('{}°C'.format(temp))
+                    if humidity is not None:
+                        parts.append('{}%'.format(humidity))
+                    if co2 is not None:
+                        parts.append('{}ppm'.format(co2))
+                    if pressure is not None:
+                        parts.append('{}hPa'.format(pressure))
+                    if noise is not None:
+                        parts.append('{}dB'.format(noise))
+
+                    line = '{}: {}'.format(device_name, ' / '.join(parts) if parts else '-')
+                    lines.append(line)
+
+        return '\n'.join(lines) if len(lines) > 1 else None
 
     def check_graph_report(self):
         """Check if it's time to send graph report (every N minutes)."""

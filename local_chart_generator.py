@@ -157,6 +157,75 @@ def downsample_sensor_data(sensor_data, interval_seconds):
     return result
 
 
+def filter_data_by_hours(sensor_data, hours):
+    """
+    Filter sensor data to include only data from the last N hours.
+
+    Args:
+        sensor_data: List of sensor readings with 'recorded_at' key
+        hours: Number of hours to include
+
+    Returns:
+        list: Filtered sensor data
+    """
+    if not sensor_data or hours <= 0:
+        return sensor_data
+
+    from datetime import timedelta
+    cutoff = datetime.now() - timedelta(hours=hours)
+
+    result = []
+    for reading in sensor_data:
+        timestamp = reading['recorded_at']
+        try:
+            if 'T' in timestamp:
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                dt = dt.replace(tzinfo=None)
+            else:
+                dt = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+
+            if dt >= cutoff:
+                result.append(reading)
+        except (ValueError, AttributeError):
+            continue
+
+    return result
+
+
+def get_date_range_from_data(devices_data):
+    """
+    Get the date range (start and end dates) from device data.
+
+    Args:
+        devices_data: Dict of {device_name: sensor_data_list}
+
+    Returns:
+        tuple: (start_date_str, end_date_str) in YYYY/MM/DD format, or (None, None) if no data
+    """
+    all_timestamps = []
+
+    for data in devices_data.values():
+        for reading in data:
+            timestamp = reading.get('recorded_at', '')
+            try:
+                if 'T' in timestamp:
+                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    dt = dt.replace(tzinfo=None)
+                else:
+                    dt = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+                all_timestamps.append(dt)
+            except (ValueError, AttributeError):
+                continue
+
+    if not all_timestamps:
+        return None, None
+
+    min_dt = min(all_timestamps)
+    max_dt = max(all_timestamps)
+
+    return min_dt.strftime('%Y/%m/%d'), max_dt.strftime('%Y/%m/%d')
+
+
 class LocalChartGenerator:
     """Generate chart images locally using matplotlib."""
 
@@ -217,7 +286,7 @@ class LocalChartGenerator:
 
         return fig, ax
 
-    def generate_multi_device_chart(self, devices_data, metric, date_str, interval_seconds=None):
+    def generate_multi_device_chart(self, devices_data, metric, date_str, interval_seconds=None, hours_range=None):
         """
         Generate chart comparing multiple devices.
 
@@ -226,12 +295,20 @@ class LocalChartGenerator:
             metric: Metric to compare ('temperature', 'humidity', 'co2', etc.)
             date_str: Date string for title
             interval_seconds: Interval for downsampling
+            hours_range: Number of hours to include (e.g., 12 or 24). None for all data.
 
         Returns:
             str: Path to generated chart image
         """
         if not MATPLOTLIB_AVAILABLE:
             return None
+
+        # Filter by time range if specified
+        if hours_range and hours_range > 0:
+            devices_data = {
+                name: filter_data_by_hours(data, hours_range)
+                for name, data in devices_data.items()
+            }
 
         # Downsample if needed
         if interval_seconds and interval_seconds > 0:
@@ -269,7 +346,17 @@ class LocalChartGenerator:
             'rain_24h': '雨量/24h (mm)'
         }
 
-        title = '{} ({})'.format(metric_labels.get(metric, metric), date_str)
+        # Build title with time range and date range
+        time_range_str = '直近{}h'.format(hours_range) if hours_range else date_str
+        start_date, end_date = get_date_range_from_data(devices_data)
+        if start_date and end_date:
+            if start_date == end_date:
+                date_range_str = start_date
+            else:
+                date_range_str = '{}〜{}'.format(start_date, end_date)
+            title = '{} ({}) {}'.format(metric_labels.get(metric, metric), time_range_str, date_range_str)
+        else:
+            title = '{} ({})'.format(metric_labels.get(metric, metric), time_range_str)
         fig, ax = self._setup_figure(title)
 
         # Plot each device
@@ -321,10 +408,10 @@ class LocalChartGenerator:
         ax.tick_params(axis='x', rotation=45, labelsize=9)
         ax.tick_params(axis='y', labelsize=10)
 
-        # Legend at top
+        # Legend at bottom
         ax.legend(
             loc='upper center',
-            bbox_to_anchor=(0.5, 1.15),
+            bbox_to_anchor=(0.5, -0.15),
             ncol=min(plotted_count, 4),
             fontsize=9,
             frameon=False
@@ -340,10 +427,11 @@ class LocalChartGenerator:
             ax.set_ylim(bottom=400)
 
         plt.tight_layout()
-        plt.subplots_adjust(top=0.85)
+        plt.subplots_adjust(bottom=0.2)
 
         # Save to file
-        filename = 'chart_{}_{}.png'.format(metric, date_str.replace('/', '-'))
+        hours_suffix = '_{}h'.format(hours_range) if hours_range else ''
+        filename = 'chart_{}{}_{}.png'.format(metric, hours_suffix, date_str.replace('/', '-'))
         filepath = os.path.join(self.output_dir, filename)
         fig.savefig(filepath, dpi=self.dpi, bbox_inches='tight', facecolor='white')
         plt.close(fig)
@@ -351,7 +439,7 @@ class LocalChartGenerator:
         logging.info("Generated chart: %s", filepath)
         return filepath
 
-    def generate_wind_chart(self, devices_data, date_str, interval_seconds=None):
+    def generate_wind_chart(self, devices_data, date_str, interval_seconds=None, hours_range=None):
         """
         Generate wind chart with speed and gust.
 
@@ -359,12 +447,20 @@ class LocalChartGenerator:
             devices_data: Dict of {device_name: sensor_data_list}
             date_str: Date string for title
             interval_seconds: Interval for downsampling
+            hours_range: Number of hours to include (e.g., 12 or 24). None for all data.
 
         Returns:
             str: Path to generated chart image
         """
         if not MATPLOTLIB_AVAILABLE:
             return None
+
+        # Filter by time range if specified
+        if hours_range and hours_range > 0:
+            devices_data = {
+                name: filter_data_by_hours(data, hours_range)
+                for name, data in devices_data.items()
+            }
 
         # Downsample if needed
         if interval_seconds and interval_seconds > 0:
@@ -384,7 +480,16 @@ class LocalChartGenerator:
         if not labels:
             return None
 
-        title = '風速 ({})'.format(date_str)
+        time_range_str = '直近{}h'.format(hours_range) if hours_range else date_str
+        start_date, end_date = get_date_range_from_data(devices_data)
+        if start_date and end_date:
+            if start_date == end_date:
+                date_range_str = start_date
+            else:
+                date_range_str = '{}〜{}'.format(start_date, end_date)
+            title = '風速 ({}) {}'.format(time_range_str, date_range_str)
+        else:
+            title = '風速 ({})'.format(time_range_str)
         fig, ax = self._setup_figure(title)
 
         wind_color = '#36A2EB'  # Blue
@@ -449,16 +554,17 @@ class LocalChartGenerator:
 
         ax.legend(
             loc='upper center',
-            bbox_to_anchor=(0.5, 1.15),
+            bbox_to_anchor=(0.5, -0.15),
             ncol=min(plotted_count, 4),
             fontsize=9,
             frameon=False
         )
 
         plt.tight_layout()
-        plt.subplots_adjust(top=0.85)
+        plt.subplots_adjust(bottom=0.2)
 
-        filename = 'chart_wind_{}.png'.format(date_str.replace('/', '-'))
+        hours_suffix = '_{}h'.format(hours_range) if hours_range else ''
+        filename = 'chart_wind{}_{}.png'.format(hours_suffix, date_str.replace('/', '-'))
         filepath = os.path.join(self.output_dir, filename)
         fig.savefig(filepath, dpi=self.dpi, bbox_inches='tight', facecolor='white')
         plt.close(fig)
@@ -466,7 +572,7 @@ class LocalChartGenerator:
         logging.info("Generated wind chart: %s", filepath)
         return filepath
 
-    def generate_wind_direction_chart(self, devices_data, date_str, interval_seconds=None):
+    def generate_wind_direction_chart(self, devices_data, date_str, interval_seconds=None, hours_range=None):
         """
         Generate wind direction chart.
 
@@ -474,12 +580,20 @@ class LocalChartGenerator:
             devices_data: Dict of {device_name: sensor_data_list}
             date_str: Date string for title
             interval_seconds: Interval for downsampling
+            hours_range: Number of hours to include (e.g., 12 or 24). None for all data.
 
         Returns:
             str: Path to generated chart image
         """
         if not MATPLOTLIB_AVAILABLE:
             return None
+
+        # Filter by time range if specified
+        if hours_range and hours_range > 0:
+            devices_data = {
+                name: filter_data_by_hours(data, hours_range)
+                for name, data in devices_data.items()
+            }
 
         if interval_seconds and interval_seconds > 0:
             devices_data = {
@@ -497,7 +611,16 @@ class LocalChartGenerator:
         if not labels:
             return None
 
-        title = '風向 ({})'.format(date_str)
+        time_range_str = '直近{}h'.format(hours_range) if hours_range else date_str
+        start_date, end_date = get_date_range_from_data(devices_data)
+        if start_date and end_date:
+            if start_date == end_date:
+                date_range_str = start_date
+            else:
+                date_range_str = '{}〜{}'.format(start_date, end_date)
+            title = '風向 ({}) {}'.format(time_range_str, date_range_str)
+        else:
+            title = '風向 ({})'.format(time_range_str)
         fig, ax = self._setup_figure(title)
 
         plotted_count = 0
@@ -544,16 +667,17 @@ class LocalChartGenerator:
 
         ax.legend(
             loc='upper center',
-            bbox_to_anchor=(0.5, 1.15),
+            bbox_to_anchor=(0.5, -0.15),
             ncol=min(plotted_count, 4),
             fontsize=9,
             frameon=False
         )
 
         plt.tight_layout()
-        plt.subplots_adjust(top=0.85)
+        plt.subplots_adjust(bottom=0.2)
 
-        filename = 'chart_wind_direction_{}.png'.format(date_str.replace('/', '-'))
+        hours_suffix = '_{}h'.format(hours_range) if hours_range else ''
+        filename = 'chart_wind_direction{}_{}.png'.format(hours_suffix, date_str.replace('/', '-'))
         filepath = os.path.join(self.output_dir, filename)
         fig.savefig(filepath, dpi=self.dpi, bbox_inches='tight', facecolor='white')
         plt.close(fig)
@@ -561,7 +685,7 @@ class LocalChartGenerator:
         logging.info("Generated wind direction chart: %s", filepath)
         return filepath
 
-    def generate_rain_chart(self, devices_data, date_str, interval_seconds=None):
+    def generate_rain_chart(self, devices_data, date_str, interval_seconds=None, hours_range=None):
         """
         Generate rain chart with 1h bar and 24h line.
 
@@ -569,12 +693,20 @@ class LocalChartGenerator:
             devices_data: Dict of {device_name: sensor_data_list}
             date_str: Date string for title
             interval_seconds: Interval for downsampling
+            hours_range: Number of hours to include (e.g., 12 or 24). None for all data.
 
         Returns:
             str: Path to generated chart image
         """
         if not MATPLOTLIB_AVAILABLE:
             return None
+
+        # Filter by time range if specified
+        if hours_range and hours_range > 0:
+            devices_data = {
+                name: filter_data_by_hours(data, hours_range)
+                for name, data in devices_data.items()
+            }
 
         if interval_seconds and interval_seconds > 0:
             devices_data = {
@@ -592,7 +724,16 @@ class LocalChartGenerator:
         if not labels:
             return None
 
-        title = '雨量 ({})'.format(date_str)
+        time_range_str = '直近{}h'.format(hours_range) if hours_range else date_str
+        start_date, end_date = get_date_range_from_data(devices_data)
+        if start_date and end_date:
+            if start_date == end_date:
+                date_range_str = start_date
+            else:
+                date_range_str = '{}〜{}'.format(start_date, end_date)
+            title = '雨量 ({}) {}'.format(time_range_str, date_range_str)
+        else:
+            title = '雨量 ({})'.format(time_range_str)
         fig, ax1 = self._setup_figure(title)
         ax2 = ax1.twinx()
 
@@ -654,22 +795,23 @@ class LocalChartGenerator:
             ax1.set_xticks(visible_ticks)
             ax1.set_xticklabels([labels[i] for i in visible_ticks], rotation=45, fontsize=9)
 
-        # Combined legend
+        # Combined legend at bottom
         lines1, labels1 = ax1.get_legend_handles_labels()
         lines2, labels2 = ax2.get_legend_handles_labels()
         ax1.legend(
             lines1 + lines2, labels1 + labels2,
             loc='upper center',
-            bbox_to_anchor=(0.5, 1.15),
+            bbox_to_anchor=(0.5, -0.15),
             ncol=min(plotted_count, 4),
             fontsize=9,
             frameon=False
         )
 
         plt.tight_layout()
-        plt.subplots_adjust(top=0.85)
+        plt.subplots_adjust(bottom=0.2)
 
-        filename = 'chart_rain_{}.png'.format(date_str.replace('/', '-'))
+        hours_suffix = '_{}h'.format(hours_range) if hours_range else ''
+        filename = 'chart_rain{}_{}.png'.format(hours_suffix, date_str.replace('/', '-'))
         filepath = os.path.join(self.output_dir, filename)
         fig.savefig(filepath, dpi=self.dpi, bbox_inches='tight', facecolor='white')
         plt.close(fig)
@@ -797,31 +939,78 @@ class SlackImageUploader:
             logging.error("Upload completion failed: %s", e)
             return False
 
+    def post_message(self, text):
+        """
+        Post a text message to Slack channel.
+
+        Args:
+            text: Message text
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if not self.bot_token or not self.channel_id:
+            return False
+
+        try:
+            response = requests.post(
+                'https://slack.com/api/chat.postMessage',
+                headers={
+                    'Authorization': 'Bearer {}'.format(self.bot_token),
+                    'Content-Type': 'application/json'
+                },
+                json={
+                    'channel': self.channel_id,
+                    'text': text
+                },
+                timeout=30
+            )
+            result = response.json()
+            return result.get('ok', False)
+        except Exception as e:
+            logging.error("Failed to post message: %s", e)
+            return False
+
     def upload_charts(self, chart_paths, date_str):
         """
         Upload multiple chart images to Slack.
+        Supports both regular keys (e.g., 'outdoor_temp') and time-suffixed keys (e.g., 'outdoor_temp_12h').
 
         Args:
-            chart_paths: Dict of {chart_type: file_path}
+            chart_paths: Dict of {chart_type: file_path} or {chart_type_Nh: file_path}
             date_str: Date string for comments
 
         Returns:
             dict: {chart_type: success_bool}
         """
         chart_titles = {
-            'outdoor_temp': '屋外 温度',
-            'outdoor_humidity': '屋外 湿度',
-            'indoor_temp': '屋内 温度',
-            'indoor_humidity': '屋内 湿度',
-            'co2': 'CO2濃度',
-            'pressure': '気圧',
-            'noise': '騒音',
-            'wind': '風速・突風',
-            'wind_direction': '風向',
-            'rain': '雨量',
+            'outdoor_temp': '🌳 屋外 温度',
+            'outdoor_humidity': '🌳 屋外 湿度',
+            'indoor_temp': '🏠 屋内 温度',
+            'indoor_humidity': '🏠 屋内 湿度',
+            'co2': '🏠 CO2濃度',
+            'pressure': '🏠 気圧',
+            'noise': '🏠 騒音',
+            'wind': '🌬️ 風速・突風',
+            'wind_direction': '🧭 風向',
+            'rain': '🌧️ 雨量',
         }
 
+        # Order: 12h charts first, then 24h charts (grouped by metric type)
         chart_order = [
+            # 12h charts
+            'outdoor_temp_12h', 'outdoor_humidity_12h',
+            'indoor_temp_12h', 'indoor_humidity_12h', 'co2_12h',
+            'pressure_12h', 'noise_12h',
+            'wind_12h', 'wind_direction_12h',
+            'rain_12h',
+            # 24h charts
+            'outdoor_temp_24h', 'outdoor_humidity_24h',
+            'indoor_temp_24h', 'indoor_humidity_24h', 'co2_24h',
+            'pressure_24h', 'noise_24h',
+            'wind_24h', 'wind_direction_24h',
+            'rain_24h',
+            # Legacy keys (without time suffix)
             'outdoor_temp', 'outdoor_humidity',
             'indoor_temp', 'indoor_humidity', 'co2',
             'pressure', 'noise',
@@ -831,16 +1020,28 @@ class SlackImageUploader:
 
         results = {}
 
-        for chart_type in chart_order:
-            if chart_type not in chart_paths or not chart_paths[chart_type]:
+        for chart_key in chart_order:
+            if chart_key not in chart_paths or not chart_paths[chart_key]:
                 continue
 
-            file_path = chart_paths[chart_type]
-            title = chart_titles.get(chart_type, chart_type)
-            comment = '{} ({})'.format(title, date_str)
+            file_path = chart_paths[chart_key]
+
+            # Extract base chart type and time suffix
+            if chart_key.endswith('_12h'):
+                base_type = chart_key[:-4]
+                time_suffix = ' (直近12h)'
+            elif chart_key.endswith('_24h'):
+                base_type = chart_key[:-4]
+                time_suffix = ' (直近24h)'
+            else:
+                base_type = chart_key
+                time_suffix = ''
+
+            title = chart_titles.get(base_type, base_type) + time_suffix
+            comment = '{}'.format(title)
 
             success = self.upload_file(file_path, title, comment)
-            results[chart_type] = success
+            results[chart_key] = success
 
             if success:
                 # Clean up temporary file
