@@ -877,17 +877,17 @@ class ChartGenerator:
         if not datasets:
             return None
 
-        # Direction labels on Y axis
+        # Direction labels on Y axis (degrees with 16 compass directions)
         options = {
             'scales': {
                 'y': {
                     'min': 0,
                     'max': 360,
                     'ticks': {
-                        'stepSize': 45,
-                        'callback': 'function(value) { var dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW", "N"]; return dirs[value/45]; }'
+                        'stepSize': 22.5,
+                        'callback': 'function(value) { var dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW", "N"]; return value + "° (" + dirs[value/22.5] + ")"; }'
                     },
-                    'title': {'display': True, 'text': '風向'}
+                    'title': {'display': True, 'text': '風向 (度)'}
                 }
             },
             'plugins': {
