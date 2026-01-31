@@ -724,6 +724,9 @@ class SwitchBotMonitor:
         """
         logging.info("Generating graph report for last 24 hours...")
 
+        # Label for chart titles
+        date_str = "直近24h"
+
         # Get all SwitchBot sensor devices
         sensor_devices = self.db.get_all_sensor_devices()
 
