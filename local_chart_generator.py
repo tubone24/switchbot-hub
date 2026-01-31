@@ -261,11 +261,21 @@ class LocalChartGenerator:
             raise ImportError("matplotlib is required. Install with: pip install matplotlib==3.5.3")
 
     def _parse_time(self, timestamp):
-        """Parse timestamp and return HH:MM string."""
-        if 'T' in timestamp:
-            return timestamp.split('T')[1][:5]
-        else:
-            return timestamp[11:16]
+        """Parse timestamp and return datetime object."""
+        try:
+            if 'T' in timestamp:
+                # ISO format: 2024-01-30T09:02:00
+                return datetime.strptime(timestamp[:19], '%Y-%m-%dT%H:%M:%S')
+            else:
+                # Space format: 2024-01-30 09:02:00
+                return datetime.strptime(timestamp[:19], '%Y-%m-%d %H:%M:%S')
+        except (ValueError, IndexError):
+            # Fallback: try to parse just time part
+            try:
+                time_str = timestamp.split('T')[1][:5] if 'T' in timestamp else timestamp[11:16]
+                return datetime.strptime(time_str, '%H:%M')
+            except:
+                return datetime.now()
 
     def _setup_figure(self, title=None):
         """Create and setup a matplotlib figure."""
@@ -347,9 +357,6 @@ class LocalChartGenerator:
             title = '{} ({})'.format(metric_labels.get(metric, metric), time_range_str)
         fig, ax = self._setup_figure(title)
 
-        # Collect all times for X-axis tick labels
-        all_times = set()
-
         # Plot each device with its own time series (to avoid gaps from mismatched timestamps)
         plotted_count = 0
         for i, (device_name, data) in enumerate(devices_data.items()):
@@ -358,14 +365,13 @@ class LocalChartGenerator:
             device_values = []
 
             for reading in data:
-                time_str = self._parse_time(reading['recorded_at'])
+                time_dt = self._parse_time(reading['recorded_at'])
                 value = reading.get(metric)
                 if value is not None:
                     if needs_wind_conversion:
                         value = round(value / 3.6, 1)
-                    device_times.append(time_str)
+                    device_times.append(time_dt)
                     device_values.append(value)
-                    all_times.add(time_str)
 
             # Skip if no valid data
             if not device_values:
@@ -389,12 +395,9 @@ class LocalChartGenerator:
             plt.close(fig)
             return None
 
-        # Set X-axis ticks from all collected times
-        all_times_sorted = sorted(list(all_times))
-        if len(all_times_sorted) > 30:
-            step = max(1, len(all_times_sorted) // 20)
-            ax.set_xticks([all_times_sorted[i] for i in range(0, len(all_times_sorted), step)])
-
+        # Set X-axis date formatting
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
         ax.tick_params(axis='x', rotation=45, labelsize=9)
         ax.tick_params(axis='y', labelsize=10)
 
@@ -474,7 +477,6 @@ class LocalChartGenerator:
         wind_color = '#36A2EB'  # Blue
         gust_color = '#FF6384'  # Red
 
-        all_times = set()
         plotted_count = 0
 
         for device_name, data in devices_data.items():
@@ -485,19 +487,17 @@ class LocalChartGenerator:
             gust_values = []
 
             for reading in data:
-                time_str = self._parse_time(reading['recorded_at'])
+                time_dt = self._parse_time(reading['recorded_at'])
                 wind_kmh = reading.get('wind_strength')
                 gust_kmh = reading.get('gust_strength')
 
                 if wind_kmh is not None:
-                    wind_times.append(time_str)
+                    wind_times.append(time_dt)
                     wind_values.append(round(wind_kmh / 3.6, 1))
-                    all_times.add(time_str)
 
                 if gust_kmh is not None:
-                    gust_times.append(time_str)
+                    gust_times.append(time_dt)
                     gust_values.append(round(gust_kmh / 3.6, 1))
-                    all_times.add(time_str)
 
             # Wind speed
             if wind_values:
@@ -537,11 +537,9 @@ class LocalChartGenerator:
         ax.set_ylim(bottom=0)
         ax.set_ylabel('m/s', fontsize=11)
 
-        all_times_sorted = sorted(list(all_times))
-        if len(all_times_sorted) > 30:
-            step = max(1, len(all_times_sorted) // 20)
-            ax.set_xticks([all_times_sorted[i] for i in range(0, len(all_times_sorted), step)])
-
+        # Set X-axis date formatting
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
         ax.tick_params(axis='x', rotation=45, labelsize=9)
 
         ax.legend(
@@ -605,7 +603,6 @@ class LocalChartGenerator:
             title = '風向 ({})'.format(time_range_str)
         fig, ax = self._setup_figure(title)
 
-        all_times = set()
         plotted_count = 0
 
         for i, (device_name, data) in enumerate(devices_data.items()):
@@ -614,12 +611,11 @@ class LocalChartGenerator:
             device_values = []
 
             for reading in data:
-                time_str = self._parse_time(reading['recorded_at'])
+                time_dt = self._parse_time(reading['recorded_at'])
                 angle = reading.get('wind_angle')
                 if angle is not None:
-                    device_times.append(time_str)
+                    device_times.append(time_dt)
                     device_values.append(angle)
-                    all_times.add(time_str)
 
             if not device_values:
                 continue
@@ -639,8 +635,6 @@ class LocalChartGenerator:
             plt.close(fig)
             return None
 
-        all_times_sorted = sorted(list(all_times))
-
         # Y-axis: 0-360 degrees with direction labels
         ax.set_ylim(0, 360)
         directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
@@ -652,10 +646,9 @@ class LocalChartGenerator:
 
         ax.set_ylabel('風向 (度)', fontsize=11)
 
-        if len(all_times_sorted) > 30:
-            step = max(1, len(all_times_sorted) // 20)
-            ax.set_xticks([all_times_sorted[i] for i in range(0, len(all_times_sorted), step)])
-
+        # Set X-axis date formatting
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
         ax.tick_params(axis='x', rotation=45, labelsize=9)
 
         ax.legend(
@@ -710,11 +703,11 @@ class LocalChartGenerator:
         all_times = set()
         for data in devices_data.values():
             for reading in data:
-                time_str = self._parse_time(reading['recorded_at'])
-                all_times.add(time_str)
+                time_dt = self._parse_time(reading['recorded_at'])
+                all_times.add(time_dt)
 
-        labels = sorted(list(all_times))
-        if not labels:
+        time_list = sorted(list(all_times))
+        if not time_list:
             return None
 
         time_range_str = '直近{}h'.format(hours_range) if hours_range else date_str
@@ -730,34 +723,39 @@ class LocalChartGenerator:
         fig, ax1 = self._setup_figure(title)
         ax2 = ax1.twinx()
 
-        bar_color = 'rgba(54, 162, 235, 0.7)'
         line_color = '#FF6384'
 
         plotted_count = 0
-        x_positions = range(len(labels))
+        # Convert datetime to matplotlib date numbers for bar chart
+        x_positions = mdates.date2num(time_list)
+        # Calculate bar width based on data interval (assume 10 minutes minimum)
+        if len(x_positions) > 1:
+            bar_width = (x_positions[-1] - x_positions[0]) / len(x_positions) * 0.8
+        else:
+            bar_width = 1 / 144  # 10 minutes in days
 
         for device_name, data in devices_data.items():
             time_1h = {}
             time_24h = {}
             for reading in data:
-                time_str = self._parse_time(reading['recorded_at'])
-                time_1h[time_str] = reading.get('rain_1h')
-                time_24h[time_str] = reading.get('rain_24h')
+                time_dt = self._parse_time(reading['recorded_at'])
+                time_1h[time_dt] = reading.get('rain_1h')
+                time_24h[time_dt] = reading.get('rain_24h')
 
             # 1h rain as bar
-            values_1h = [time_1h.get(t) if time_1h.get(t) is not None else 0 for t in labels]
+            values_1h = [time_1h.get(t) if time_1h.get(t) is not None else 0 for t in time_list]
             if any(v > 0 for v in values_1h):
                 ax1.bar(
                     x_positions, values_1h,
                     label='{} (1h)'.format(device_name),
                     color='#36A2EB',
                     alpha=0.7,
-                    width=0.8
+                    width=bar_width
                 )
                 plotted_count += 1
 
             # 24h rain as line
-            values_24h = [time_24h.get(t) if time_24h.get(t) is not None else float('nan') for t in labels]
+            values_24h = [time_24h.get(t) if time_24h.get(t) is not None else float('nan') for t in time_list]
             if not all(v != v for v in values_24h):
                 ax2.plot(
                     x_positions, values_24h,
@@ -779,14 +777,10 @@ class LocalChartGenerator:
         ax1.set_ylim(bottom=0)
         ax2.set_ylim(bottom=0)
 
-        ax1.set_xticks(list(x_positions))
-        ax1.set_xticklabels(labels, rotation=45, fontsize=9)
-
-        if len(labels) > 30:
-            step = max(1, len(labels) // 20)
-            visible_ticks = [i for i in range(0, len(labels), step)]
-            ax1.set_xticks(visible_ticks)
-            ax1.set_xticklabels([labels[i] for i in visible_ticks], rotation=45, fontsize=9)
+        # Set X-axis date formatting
+        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+        ax1.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax1.tick_params(axis='x', rotation=45, labelsize=9)
 
         # Combined legend at bottom
         lines1, labels1 = ax1.get_legend_handles_labels()
