@@ -718,12 +718,11 @@ class SwitchBotMonitor:
     def send_graph_report(self):
         """
         Send graph report for all sensor devices to #atmos-graph channel.
-        Shows data from today midnight to now.
+        Shows data from the last 24 hours.
         Separates outdoor and indoor sensors.
         Includes both SwitchBot and Netatmo sensors.
         """
-        date_str = datetime.now().strftime('%Y-%m-%d')
-        logging.info("Generating graph report for %s...", date_str)
+        logging.info("Generating graph report for last 24 hours...")
 
         # Get all SwitchBot sensor devices
         sensor_devices = self.db.get_all_sensor_devices()
@@ -744,11 +743,11 @@ class SwitchBotMonitor:
             device_name = device['device_name']
 
             try:
-                # Get today's data
-                sensor_data = self.db.get_sensor_data_for_date(device_id, date_str)
+                # Get last 24 hours data
+                sensor_data = self.db.get_sensor_data_last_24h(device_id)
 
                 if not sensor_data:
-                    logging.debug("No data for %s on %s", device_name, date_str)
+                    logging.debug("No data for %s in last 24 hours", device_name)
                     continue
 
                 # Separate outdoor vs indoor
@@ -788,11 +787,11 @@ class SwitchBotMonitor:
                 is_outdoor = device.get('is_outdoor', False)
 
                 try:
-                    # Get today's data
-                    sensor_data = self.db.get_netatmo_data_for_date(device_id, date_str)
+                    # Get last 24 hours data
+                    sensor_data = self.db.get_netatmo_data_last_24h(device_id)
 
                     if not sensor_data:
-                        logging.debug("No Netatmo data for %s on %s", device_name, date_str)
+                        logging.debug("No Netatmo data for %s in last 24 hours", device_name)
                         continue
 
                     display_name = "[NA] " + device_name

@@ -33,19 +33,26 @@ def downsample_sensor_data(sensor_data, interval_seconds):
     from datetime import datetime
 
     grouped = {}  # {interval_key: [readings]}
+    first_dt = None
 
     for reading in sensor_data:
         timestamp = reading['recorded_at']
         try:
-            # Parse ISO format timestamp
+            # Parse ISO format timestamp (remove timezone for consistent comparison)
             if 'T' in timestamp:
                 dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                # Remove timezone info for consistent calculation
+                dt = dt.replace(tzinfo=None)
             else:
                 dt = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
 
-            # Calculate interval key (seconds since midnight, rounded to interval)
-            seconds_since_midnight = dt.hour * 3600 + dt.minute * 60 + dt.second
-            interval_key = (seconds_since_midnight // interval_seconds) * interval_seconds
+            # Initialize reference point with first data point
+            if first_dt is None:
+                first_dt = dt
+
+            # Calculate interval key (seconds since first data point, rounded to interval)
+            seconds_since_start = int((dt - first_dt).total_seconds())
+            interval_key = (seconds_since_start // interval_seconds) * interval_seconds
 
             if interval_key not in grouped:
                 grouped[interval_key] = []
