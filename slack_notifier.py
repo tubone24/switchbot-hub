@@ -246,6 +246,109 @@ class SlackNotifier:
 
         return self._send_to_channel('atmos_update', text, blocks)
 
+    def notify_netatmo_update(self, device_name, module_type, is_outdoor, reading):
+        """
+        Send Netatmo sensor update to #atmos-update channel.
+
+        Args:
+            device_name: Device name
+            module_type: Netatmo module type (NAMain, NAModule1, etc.)
+            is_outdoor: Whether this is an outdoor module
+            reading: Sensor reading dict
+
+        Returns:
+            bool: True if sent successfully
+        """
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # Build status summary based on module type
+        summaries = []
+
+        # Temperature and humidity (most modules)
+        if reading.get('temperature') is not None:
+            summaries.append("{:.1f}°C".format(reading['temperature']))
+        if reading.get('humidity') is not None:
+            summaries.append("{}%".format(reading['humidity']))
+
+        # CO2 (indoor modules)
+        if reading.get('co2') is not None:
+            summaries.append("{}ppm".format(reading['co2']))
+
+        # Pressure (main station)
+        if reading.get('pressure') is not None:
+            summaries.append("{:.1f}hPa".format(reading['pressure']))
+
+        # Noise (main station)
+        if reading.get('noise') is not None:
+            summaries.append("{}dB".format(reading['noise']))
+
+        # Wind (NAModule2)
+        if reading.get('wind_strength') is not None:
+            wind_str = "風速{}km/h".format(reading['wind_strength'])
+            if reading.get('gust_strength') is not None:
+                wind_str += "(突風{}km/h)".format(reading['gust_strength'])
+            if reading.get('wind_angle') is not None:
+                direction = self._angle_to_direction(reading['wind_angle'])
+                wind_str = "{}{}".format(direction, wind_str)
+            summaries.append(wind_str)
+
+        # Rain (NAModule3)
+        if reading.get('rain') is not None or reading.get('rain_24h') is not None:
+            rain_parts = []
+            if reading.get('rain') is not None:
+                rain_parts.append("{}mm".format(reading['rain']))
+            if reading.get('rain_1h') is not None:
+                rain_parts.append("1h:{}mm".format(reading['rain_1h']))
+            if reading.get('rain_24h') is not None:
+                rain_parts.append("24h:{}mm".format(reading['rain_24h']))
+            summaries.append("雨量 " + " / ".join(rain_parts))
+
+        status_text = " / ".join(summaries) if summaries else "No data"
+
+        # Emoji based on location
+        emoji = "🌳" if is_outdoor else "🏠"
+
+        # Module type description
+        module_desc = {
+            'NAMain': '屋内メイン',
+            'NAModule1': '屋外',
+            'NAModule2': '風速計',
+            'NAModule3': '雨量計',
+            'NAModule4': '屋内追加'
+        }.get(module_type, module_type)
+
+        text = "{} [{}] {}".format(emoji, device_name, status_text)
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "{} *{}*\n{}".format(emoji, device_name, status_text)
+                }
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "Netatmo {} | {}".format(module_desc, timestamp)
+                    }
+                ]
+            }
+        ]
+
+        return self._send_to_channel('atmos_update', text, blocks)
+
+    def _angle_to_direction(self, angle):
+        """Convert wind angle to compass direction."""
+        if angle is None:
+            return ''
+        directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                      'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
+        idx = round(angle / 22.5) % 16
+        return directions[idx]
+
     def notify_atmos_graph(self, date_str, devices_data, chart_urls):
         """
         Send atmosphere graph to #atmos-graph channel.

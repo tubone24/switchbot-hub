@@ -457,14 +457,23 @@ class SwitchBotMonitor:
                         parts.append("wind={}km/h".format(reading['wind_strength']))
                     if reading.get('gust_strength') is not None:
                         parts.append("gust={}km/h".format(reading['gust_strength']))
+                    if reading.get('wind_angle') is not None:
+                        parts.append("dir={}°".format(reading['wind_angle']))
                     if reading.get('rain') is not None:
                         parts.append("rain={}mm".format(reading['rain']))
+                    if reading.get('rain_1h') is not None:
+                        parts.append("rain1h={}mm".format(reading['rain_1h']))
                     if reading.get('rain_24h') is not None:
                         parts.append("rain24h={}mm".format(reading['rain_24h']))
 
                     logging.info(
                         "[Netatmo] %s (%s/%s): %s",
                         device_name, station_name, location, ", ".join(parts)
+                    )
+
+                    # Send Slack notification to #atmos-update
+                    self.slack.notify_netatmo_update(
+                        device_name, module_type, is_outdoor, reading
                     )
 
             logging.info("Netatmo polling complete: %d readings", len(readings))
