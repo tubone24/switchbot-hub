@@ -296,6 +296,18 @@ class LocalChartGenerator:
 
         return fig, ax
 
+    def _setup_xaxis_ticks(self, ax, hours_range=None):
+        """Setup X-axis date formatting based on hours_range."""
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+        if hours_range == 12:
+            # 12-hour chart: ticks every 30 minutes
+            ax.xaxis.set_major_locator(mdates.MinuteLocator(byminute=[0, 30]))
+        elif hours_range == 24:
+            # 24-hour chart: ticks every 1 hour
+            ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+        else:
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+
     def generate_multi_device_chart(self, devices_data, metric, date_str, interval_seconds=None, hours_range=None):
         """
         Generate chart comparing multiple devices.
@@ -396,8 +408,7 @@ class LocalChartGenerator:
             return None
 
         # Set X-axis date formatting
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        self._setup_xaxis_ticks(ax, hours_range)
         ax.tick_params(axis='x', rotation=45, labelsize=9)
         ax.tick_params(axis='y', labelsize=10)
 
@@ -538,8 +549,7 @@ class LocalChartGenerator:
         ax.set_ylabel('m/s', fontsize=11)
 
         # Set X-axis date formatting
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        self._setup_xaxis_ticks(ax, hours_range)
         ax.tick_params(axis='x', rotation=45, labelsize=9)
 
         ax.legend(
@@ -647,8 +657,7 @@ class LocalChartGenerator:
         ax.set_ylabel('風向 (度)', fontsize=11)
 
         # Set X-axis date formatting
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        self._setup_xaxis_ticks(ax, hours_range)
         ax.tick_params(axis='x', rotation=45, labelsize=9)
 
         ax.legend(
@@ -778,8 +787,7 @@ class LocalChartGenerator:
         ax2.set_ylim(bottom=0)
 
         # Set X-axis date formatting
-        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-        ax1.xaxis.set_major_locator(mdates.AutoDateLocator())
+        self._setup_xaxis_ticks(ax1, hours_range)
         ax1.tick_params(axis='x', rotation=45, labelsize=9)
 
         # Combined legend at bottom
