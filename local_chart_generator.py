@@ -537,6 +537,7 @@ class LocalChartGenerator:
         ax.set_ylim(bottom=0)
         ax.set_ylabel('m/s', fontsize=11)
 
+        all_times_sorted = sorted(list(all_times))
         if len(all_times_sorted) > 30:
             step = max(1, len(all_times_sorted) // 20)
             ax.set_xticks([all_times_sorted[i] for i in range(0, len(all_times_sorted), step)])
