@@ -111,15 +111,15 @@ class SlackNotifier:
         """
         # Lock devices
         if device_type in ['Smart Lock', 'Smart Lock Pro', 'Lock']:
-            lock_state = status.get('lockState', '')
+            lock_state = status.get('lockState', '').lower()
             if lock_state == 'locked':
-                return "{}が施錠されました".format(device_name)
+                return "玄関を施錠しました"
             elif lock_state == 'unlocked':
-                return "{}が解錠されました".format(device_name)
+                return "玄関を解錠しました"
             elif lock_state == 'jammed':
-                return "{}がジャム（詰まり）状態です！".format(device_name)
+                return "玄関のロックがジャム（詰まり）状態です！"
             else:
-                return "{}の状態が変わりました: {}".format(device_name, lock_state)
+                return "玄関のロック状態: {}".format(lock_state)
 
         # Contact Sensor (door/window open/close)
         if device_type == 'Contact Sensor':
