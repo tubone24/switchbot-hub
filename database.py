@@ -189,7 +189,7 @@ class DeviceDatabase:
         Returns:
             bool: True if state changed, False if same
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now().isoformat()
         status_json = json.dumps(status, sort_keys=True, ensure_ascii=False)
 
         # Get existing state
@@ -336,7 +336,7 @@ class DeviceDatabase:
 
         cursor.execute('''
             DELETE FROM device_history
-            WHERE recorded_at < datetime('now', '-{} days')
+            WHERE recorded_at < datetime('now', 'localtime', '-{} days')
         '''.format(int(days)))
 
         deleted = cursor.rowcount
@@ -369,7 +369,7 @@ class DeviceDatabase:
         if temperature is None and humidity is None and co2 is None:
             return False
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now().isoformat()
 
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -562,7 +562,7 @@ class DeviceDatabase:
 
         cursor.execute('''
             DELETE FROM sensor_timeseries
-            WHERE recorded_at < datetime('now', '-{} days')
+            WHERE recorded_at < datetime('now', 'localtime', '-{} days')
         '''.format(int(days)))
 
         deleted = cursor.rowcount
@@ -613,7 +613,7 @@ class DeviceDatabase:
         if not has_data:
             return False
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now().isoformat()
 
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -745,7 +745,7 @@ class DeviceDatabase:
 
         cursor.execute('''
             DELETE FROM netatmo_timeseries
-            WHERE recorded_at < datetime('now', '-{} days')
+            WHERE recorded_at < datetime('now', 'localtime', '-{} days')
         '''.format(int(days)))
 
         deleted = cursor.rowcount
@@ -772,9 +772,9 @@ class DeviceDatabase:
         cursor.execute('''
             SELECT * FROM netatmo_timeseries
             WHERE device_id = ?
-            AND recorded_at BETWEEN datetime('now', '-{} hours', '-30 minutes')
-                                AND datetime('now', '-{} hours', '+30 minutes')
-            ORDER BY ABS(julianday(recorded_at) - julianday(datetime('now', '-{} hours')))
+            AND recorded_at BETWEEN datetime('now', 'localtime', '-{} hours', '-30 minutes')
+                                AND datetime('now', 'localtime', '-{} hours', '+30 minutes')
+            ORDER BY ABS(julianday(recorded_at) - julianday(datetime('now', 'localtime', '-{} hours')))
             LIMIT 1
         '''.format(hours, hours, hours), (device_id,))
 
@@ -834,7 +834,7 @@ class DeviceDatabase:
             SELECT recorded_at, pressure FROM netatmo_timeseries
             WHERE device_id = ?
             AND pressure IS NOT NULL
-            AND recorded_at >= datetime('now', '-{} hours')
+            AND recorded_at >= datetime('now', 'localtime', '-{} hours')
             ORDER BY recorded_at ASC
         '''.format(hours), (device_id,))
 
