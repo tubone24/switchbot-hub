@@ -18,7 +18,13 @@
         "client_secret": "YOUR_OAUTH_CLIENT_SECRET",
         "refresh_token": "YOUR_REFRESH_TOKEN",
         "credentials_file": null,
-        "interval_seconds": 300
+        "interval_seconds": 300,
+        "pubsub": {
+            "enabled": false,
+            "gcp_project_id": "YOUR_GCP_PROJECT_ID",
+            "subscription_id": "YOUR_PUBSUB_SUBSCRIPTION_ID",
+            "poll_timeout_seconds": 60
+        }
     },
     "slack": {
         "bot_token": null,

@@ -17,6 +17,7 @@ from datetime import datetime
 from switchbot_api import SwitchBotAPI
 from netatmo_api import NetatmoAPI
 from google_nest_api import GoogleNestAPI
+from google_nest_pubsub import GoogleNestPubSubClient
 from database import DeviceDatabase
 from slack_notifier import SlackNotifier
 from webhook_server import WebhookServer, parse_webhook_event
@@ -160,6 +161,7 @@ class SwitchBotMonitor:
 
         # Initialize Google Nest API (optional)
         self.nest_api = None
+        self.nest_pubsub = None
         nest_config = config.get('google_nest', {})
         if nest_config.get('enabled', False):
             try:
@@ -171,6 +173,22 @@ class SwitchBotMonitor:
                     credentials_file=nest_config.get('credentials_file')
                 )
                 logging.info("Google Nest API initialized")
+
+                # Initialize Pub/Sub client for real-time events
+                pubsub_config = nest_config.get('pubsub', {})
+                if pubsub_config.get('enabled', False):
+                    self.nest_pubsub = GoogleNestPubSubClient(
+                        gcp_project_id=pubsub_config['gcp_project_id'],
+                        subscription_id=pubsub_config['subscription_id'],
+                        client_id=nest_config['client_id'],
+                        client_secret=nest_config['client_secret'],
+                        refresh_token=nest_config['refresh_token'],
+                        device_access_project_id=nest_config['project_id'],
+                        credentials_file=nest_config.get('credentials_file')
+                    )
+                    self.nest_pubsub.set_event_callback(self.handle_nest_event)
+                    logging.info("Google Nest Pub/Sub client initialized")
+
             except Exception as e:
                 logging.error("Failed to initialize Google Nest API: %s", e)
 
@@ -596,6 +614,42 @@ class SwitchBotMonitor:
             logging.error("Error polling Google Nest: %s", e)
             if self.config.get('slack', {}).get('notify_errors', False):
                 self.slack.notify_error("Google Nest: {}".format(str(e)))
+
+    def handle_nest_event(self, event_type, device_id, device_name, event_data):
+        """
+        Handle Google Nest Pub/Sub event.
+
+        Args:
+            event_type: Event type ('chime', 'motion', 'person', 'sound')
+            device_id: Device ID
+            device_name: Device name
+            event_data: Event data dict
+        """
+        logging.info(
+            "[Nest Pub/Sub] Event: %s from %s (%s)",
+            event_type, device_name, device_id
+        )
+
+        try:
+            # Get clip preview URL if available
+            clip_url = event_data.get('preview_url')
+
+            # Send Slack notification based on event type
+            if event_type == 'chime':
+                # Doorbell chime event
+                self.slack.notify_nest_doorbell(
+                    device_name, event_type,
+                    event_data={'clip_url': clip_url} if clip_url else None
+                )
+            elif event_type in ['motion', 'person', 'sound']:
+                # Camera event
+                self.slack.notify_nest_camera_event(
+                    device_name, event_type,
+                    clip_url=clip_url
+                )
+
+        except Exception as e:
+            logging.error("Error handling Nest event: %s", e)
 
     def _can_send_alert(self, alert_type, device_id):
         """Check if we can send an alert (respecting cooldown)."""
@@ -1314,6 +1368,21 @@ class SwitchBotMonitor:
             self.poll_nest()
             self.last_nest_poll = time.time()
 
+            # Start Pub/Sub client for real-time events
+            if self.nest_pubsub:
+                # Set device names for better event notifications
+                device_names = {
+                    dev_id: state.get('device_name', dev_id)
+                    for dev_id, state in self.nest_device_states.items()
+                }
+                self.nest_pubsub.set_device_names(device_names)
+
+                # Start Pub/Sub long polling
+                pubsub_config = self.config.get('google_nest', {}).get('pubsub', {})
+                poll_timeout = pubsub_config.get('poll_timeout_seconds', 60)
+                self.nest_pubsub.start(poll_timeout=poll_timeout)
+                logging.info("Google Nest Pub/Sub client started (timeout=%ds)", poll_timeout)
+
         # Send initial graph report immediately after first poll
         if self.config.get('graph_report', {}).get('enabled', False):
             logging.info("Sending initial graph report...")
@@ -1354,6 +1423,10 @@ class SwitchBotMonitor:
     def shutdown(self):
         """Clean shutdown."""
         logging.info("Shutting down...")
+
+        # Stop Pub/Sub client
+        if self.nest_pubsub:
+            self.nest_pubsub.stop()
 
         # Stop webhook server
         if self.webhook_server:
