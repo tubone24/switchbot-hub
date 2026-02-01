@@ -424,31 +424,31 @@ class GarbageNotifier:
 
     def should_notify_evening(self, now=None):
         """
-        Check if it's time for evening notification (20:00).
+        Check if it's time for evening notification.
 
         Args:
             now: datetime object (for testing)
 
         Returns:
-            bool: True if it's 20:00
+            bool: True if it's the configured evening hour
         """
         if now is None:
             now = datetime.now()
-        return now.hour == 20 and now.minute == 0
+        return now.hour == self.evening_hour and now.minute == 0
 
     def should_notify_morning(self, now=None):
         """
-        Check if it's time for morning notification (6:00).
+        Check if it's time for morning notification.
 
         Args:
             now: datetime object (for testing)
 
         Returns:
-            bool: True if it's 6:00
+            bool: True if it's the configured morning hour
         """
         if now is None:
             now = datetime.now()
-        return now.hour == 6 and now.minute == 0
+        return now.hour == self.morning_hour and now.minute == 0
 
 
 if __name__ == '__main__':
