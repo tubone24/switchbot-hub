@@ -45,6 +45,12 @@ def signal_handler(signum, frame):
 
 def setup_logging(log_level='INFO', log_file=None):
     """Setup logging configuration."""
+    # Clear any existing handlers (set by imported modules like matplotlib)
+    # This is needed because basicConfig does nothing if handlers already exist
+    root = logging.getLogger()
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+
     handlers = [logging.StreamHandler(sys.stdout)]
 
     if log_file:
