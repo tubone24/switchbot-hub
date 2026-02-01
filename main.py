@@ -459,6 +459,10 @@ class SwitchBotMonitor:
             try:
                 status = self.api.get_device_status(device_id)
 
+                # Debug: dump full status for Hub 2 to check if lightLevel exists
+                if 'Hub' in device_type:
+                    logging.info("Full status for %s (%s): %s", device_name, device_type, status)
+
                 # Get previous state
                 previous = self.db.get_device_state(device_id)
                 previous_status = previous['status'] if previous else None

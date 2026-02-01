@@ -513,11 +513,12 @@ class SlackNotifier:
             gust_strength = device.get('gust_strength', {}).get('latest', '-') if is_wind_module else '-'
             rain = device.get('rain', {}).get('latest', '-') if is_rain_module else '-'
             rain_24h = device.get('rain_24h', {}).get('latest', '-') if is_rain_module else '-'
+            light_level = device.get('light_level', {}).get('latest', '-')
 
             has_data = any([
                 temp != '-', humidity != '-', co2 != '-',
                 pressure != '-', noise != '-',
-                wind_strength != '-', rain != '-'
+                wind_strength != '-', rain != '-', light_level != '-'
             ])
 
             if has_data:
@@ -551,6 +552,9 @@ class SlackNotifier:
                     parts.append("{}mm/24h".format(rain_24h))
                 elif rain != '-':
                     parts.append("{}mm".format(rain))
+                # Light level data (SwitchBot Hub 2, Contact/Motion Sensor)
+                if light_level != '-':
+                    parts.append("照度:{}".format(light_level))
 
                 line = "*{}*: {}".format(name, " / ".join(parts))
 
