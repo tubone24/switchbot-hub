@@ -644,6 +644,9 @@ class SwitchBotMonitor:
             clip_downloaded = False
             clip_path = None
 
+            logging.debug("Event data keys: %s", list(event_data.keys()))
+            logging.debug("Preview URL: %s", preview_url[:50] if preview_url else None)
+
             # Try to download clip preview
             if preview_url and self.nest_pubsub:
                 import tempfile
