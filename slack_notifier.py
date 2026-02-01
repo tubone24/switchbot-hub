@@ -26,6 +26,11 @@ class SlackNotifier:
         'WoIOSensor', 'Hub 2', 'Outdoor Meter'
     ]
 
+    # Google Nest device types
+    NEST_DEVICE_TYPES = [
+        'Doorbell', 'Camera', 'Display', 'Thermostat'
+    ]
+
     def __init__(self, config):
         """
         Initialize Slack notifier with channel configuration.
@@ -35,6 +40,10 @@ class SlackNotifier:
         """
         self.enabled = config.get('enabled', True)
         self.channels = config.get('channels', {})
+        self.bot_token = config.get('bot_token')
+
+        # Channel IDs for file uploads (different from webhook URLs)
+        self.channel_ids = config.get('channel_ids', {})
 
         # Backwards compatibility: if 'webhook_url' is provided, use for all
         if 'webhook_url' in config and not self.channels:
@@ -81,6 +90,112 @@ class SlackNotifier:
             print("[Slack] Failed to send to {}: {}".format(channel, e))
             return False
 
+    def upload_file(self, channel, file_path=None, file_content=None, filename=None,
+                    title=None, initial_comment=None):
+        """
+        Upload a file to Slack channel using Bot Token.
+
+        Args:
+            channel: Channel key ('home_security', etc.) or channel ID
+            file_path: Path to file to upload
+            file_content: File content as bytes (alternative to file_path)
+            filename: Filename for the upload
+            title: Title for the file
+            initial_comment: Comment to add with the file
+
+        Returns:
+            bool: True if uploaded successfully
+        """
+        if not self.enabled:
+            return True
+
+        if not self.bot_token:
+            print("[Slack] Bot token not configured for file upload")
+            return False
+
+        # Get channel ID
+        channel_id = self.channel_ids.get(channel, channel)
+
+        headers = {
+            'Authorization': 'Bearer {}'.format(self.bot_token)
+        }
+
+        try:
+            # Step 1: Get upload URL
+            if file_path:
+                import os
+                file_size = os.path.getsize(file_path)
+                if not filename:
+                    filename = os.path.basename(file_path)
+            elif file_content:
+                file_size = len(file_content)
+                if not filename:
+                    filename = 'file'
+            else:
+                print("[Slack] No file provided")
+                return False
+
+            # Get upload URL using files.getUploadURLExternal
+            url_response = requests.post(
+                'https://slack.com/api/files.getUploadURLExternal',
+                headers=headers,
+                data={
+                    'filename': filename,
+                    'length': file_size
+                },
+                timeout=30
+            )
+            url_data = url_response.json()
+
+            if not url_data.get('ok'):
+                print("[Slack] Failed to get upload URL: {}".format(url_data.get('error')))
+                return False
+
+            upload_url = url_data['upload_url']
+            file_id = url_data['file_id']
+
+            # Step 2: Upload file to URL
+            if file_path:
+                with open(file_path, 'rb') as f:
+                    upload_response = requests.post(
+                        upload_url,
+                        files={'file': f},
+                        timeout=60
+                    )
+            else:
+                upload_response = requests.post(
+                    upload_url,
+                    files={'file': (filename, file_content)},
+                    timeout=60
+                )
+
+            if upload_response.status_code != 200:
+                print("[Slack] Failed to upload file: {}".format(upload_response.status_code))
+                return False
+
+            # Step 3: Complete upload with files.completeUploadExternal
+            complete_response = requests.post(
+                'https://slack.com/api/files.completeUploadExternal',
+                headers=headers,
+                json={
+                    'files': [{'id': file_id, 'title': title or filename}],
+                    'channel_id': channel_id,
+                    'initial_comment': initial_comment or ''
+                },
+                timeout=30
+            )
+            complete_data = complete_response.json()
+
+            if not complete_data.get('ok'):
+                print("[Slack] Failed to complete upload: {}".format(complete_data.get('error')))
+                return False
+
+            return True
+
+        except requests.exceptions.RequestException as e:
+            print("[Slack] Failed to upload file: {}".format(e))
+            return False
+
     def get_device_category(self, device_type):
         """
         Determine device category based on type.
@@ -111,15 +226,15 @@ class SlackNotifier:
         """
         # Lock devices
         if device_type in ['Smart Lock', 'Smart Lock Pro', 'Lock']:
-            lock_state = status.get('lockState', '')
+            lock_state = status.get('lockState', '').lower()
             if lock_state == 'locked':
-                return "{}が施錠されました".format(device_name)
+                return "玄関の鍵が締まりました"
             elif lock_state == 'unlocked':
-                return "{}が解錠されました".format(device_name)
+                return "玄関の鍵が開きました"
             elif lock_state == 'jammed':
-                return "{}がジャム（詰まり）状態です！".format(device_name)
+                return "玄関のロックがジャム（詰まり）状態です！"
             else:
-                return "{}の状態が変わりました: {}".format(device_name, lock_state)
+                return "玄関のロック状態: {}".format(lock_state)
 
         # Contact Sensor (door/window open/close)
         if device_type == 'Contact Sensor':
@@ -135,8 +250,11 @@ class SlackNotifier:
 
         # Motion Sensor
         if device_type == 'Motion Sensor':
-            detected = status.get('moveDetected', False)
-            if detected:
+            # Check both formats: API status uses 'moveDetected', Webhook uses 'detectionState'
+            detection_state = status.get('detectionState', '')
+            move_detected = status.get('moveDetected', False)
+
+            if detection_state == 'DETECTED' or move_detected:
                 return "{}が動きを検知しました".format(device_name)
             else:
                 return "{}の動き検知がクリアされました".format(device_name)
@@ -167,14 +285,14 @@ class SlackNotifier:
         emoji = ""
         if 'Lock' in device_type:
             lock_state = status.get('lockState', '')
-            emoji = "" if lock_state == 'locked' else ""
+            emoji = "🔒" if lock_state == 'locked' else "🔓"
         elif device_type == 'Contact Sensor':
             open_state = status.get('openState', '')
-            emoji = "" if open_state == 'open' else ""
+            emoji = "🚪" if open_state == 'open' else "✅"
         elif device_type == 'Motion Sensor':
-            emoji = ""
+            emoji = "👁️"
         elif device_type == 'Video Doorbell':
-            emoji = ""
+            emoji = "🔔"
 
         text = "{} {}".format(emoji, message_ja)
 
@@ -282,11 +400,13 @@ class SlackNotifier:
         if reading.get('noise') is not None:
             summaries.append("{}dB".format(reading['noise']))
 
-        # Wind (NAModule2)
+        # Wind (NAModule2) - convert km/h to m/s
         if reading.get('wind_strength') is not None:
-            wind_str = "風速{}km/h".format(reading['wind_strength'])
+            wind_ms = reading['wind_strength'] / 3.6
+            wind_str = "風速{:.1f}m/s".format(wind_ms)
             if reading.get('gust_strength') is not None:
-                wind_str += "(突風{}km/h)".format(reading['gust_strength'])
+                gust_ms = reading['gust_strength'] / 3.6
+                wind_str += "(突風{:.1f}m/s)".format(gust_ms)
             if reading.get('wind_angle') is not None:
                 direction = self._angle_to_direction(reading['wind_angle'])
                 wind_str = "{}{}".format(direction, wind_str)
@@ -412,11 +532,13 @@ class SlackNotifier:
                         parts.append("{}hPa".format(pressure))
                 if noise != '-':
                     parts.append("{}dB".format(noise))
-                # Wind data (only for NAModule2)
+                # Wind data (only for NAModule2) - convert km/h to m/s
                 if wind_strength != '-':
-                    wind_str = "{}km/h".format(wind_strength)
+                    wind_ms = float(wind_strength) / 3.6
+                    wind_str = "{:.1f}m/s".format(wind_ms)
                     if gust_strength != '-':
-                        wind_str += " (突風:{}km/h)".format(gust_strength)
+                        gust_ms = float(gust_strength) / 3.6
+                        wind_str += " (突風:{:.1f}m/s)".format(gust_ms)
                     parts.append(wind_str)
                 # Rain data (only for NAModule3)
                 if rain_24h != '-':
@@ -619,6 +741,199 @@ class SlackNotifier:
         })
 
         return self._send_to_channel('outdoor_alert', text, blocks)
+
+    def notify_nest_doorbell(self, device_name, event_type, event_data=None):
+        """
+        Send Google Nest doorbell/camera event notification to #home-security channel.
+
+        Args:
+            device_name: Device name
+            event_type: Event type ('chime', 'motion', 'person', 'sound')
+            event_data: Optional event data dict
+
+        Returns:
+            bool: True if sent successfully
+        """
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # Event type to Japanese message and emoji
+        event_config = {
+            'chime': {
+                'emoji': '',
+                'message': 'ドアベルが押されました',
+                'detail': 'チャイムが鳴りました'
+            },
+            'motion': {
+                'emoji': '',
+                'message': '動きを検知しました',
+                'detail': 'カメラが動きを検出'
+            },
+            'person': {
+                'emoji': '',
+                'message': '人物を検知しました',
+                'detail': '人物が検出されました'
+            },
+            'sound': {
+                'emoji': '',
+                'message': '音を検知しました',
+                'detail': '音声が検出されました'
+            },
+        }
+
+        config = event_config.get(event_type, {
+            'emoji': '',
+            'message': 'イベントが発生しました',
+            'detail': event_type
+        })
+
+        emoji = config['emoji']
+        message = config['message']
+
+        text = "{} [{}] {}".format(emoji, device_name, message)
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*{} {}*\n{}".format(emoji, message, device_name)
+                }
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "Google Nest {} | {}".format(
+                            'Doorbell' if event_type == 'chime' else 'Camera',
+                            timestamp
+                        )
+                    }
+                ]
+            }
+        ]
+
+        # Add image if available in event_data
+        if event_data and event_data.get('image_url'):
+            blocks.insert(1, {
+                "type": "image",
+                "image_url": event_data['image_url'],
+                "alt_text": "{} - {}".format(device_name, message)
+            })
+
+        return self._send_to_channel('home_security', text, blocks)
+
+    def notify_nest_camera_event(self, device_name, event_type, zone_name=None, clip_url=None):
+        """
+        Send Google Nest camera event notification.
+
+        Args:
+            device_name: Camera device name
+            event_type: Event type ('motion', 'person', 'sound')
+            zone_name: Optional activity zone name
+            clip_url: Optional clip preview URL
+
+        Returns:
+            bool: True if sent successfully
+        """
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        event_config = {
+            'motion': {'emoji': '', 'message': '動きを検知'},
+            'person': {'emoji': '', 'message': '人物を検知'},
+            'sound': {'emoji': '', 'message': '音を検知'},
+        }
+
+        config = event_config.get(event_type, {'emoji': '', 'message': event_type})
+        emoji = config['emoji']
+        message = config['message']
+
+        location_text = ''
+        if zone_name:
+            location_text = ' ({})'.format(zone_name)
+
+        text = "{} [{}] {}{}".format(emoji, device_name, message, location_text)
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*{} {}{}*\n{}".format(emoji, message, location_text, device_name)
+                }
+            }
+        ]
+
+        # Add clip link if available
+        if clip_url:
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "<{}|クリップを見る>".format(clip_url)
+                }
+            })
+
+        blocks.append({
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "Google Nest Camera | {}".format(timestamp)
+                }
+            ]
+        })
+
+        return self._send_to_channel('home_security', text, blocks)
+
+    def notify_nest_device_status(self, device_name, device_type, status):
+        """
+        Send Google Nest device status update.
+
+        Args:
+            device_name: Device name
+            device_type: Device type ('Doorbell', 'Camera')
+            status: Status dict with connectivity info
+
+        Returns:
+            bool: True if sent successfully
+        """
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        connectivity = status.get('connectivity_status', 'UNKNOWN')
+
+        if connectivity == 'OFFLINE':
+            emoji = ''
+            message = 'オフラインになりました'
+        elif connectivity == 'ONLINE':
+            emoji = ''
+            message = 'オンラインに復帰しました'
+        else:
+            emoji = ''
+            message = '状態: {}'.format(connectivity)
+
+        text = "{} [{}] {}".format(emoji, device_name, message)
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*{} {}*\n{}".format(emoji, message, device_name)
+                }
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "Google Nest {} | {}".format(device_type, timestamp)
+                    }
+                ]
+            }
+        ]
+
+        return self._send_to_channel('home_security', text, blocks)
 
     def notify_error(self, error_message, device_name=None, channel='home_security'):
         """

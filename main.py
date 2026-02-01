@@ -16,11 +16,21 @@ from datetime import datetime
 
 from switchbot_api import SwitchBotAPI
 from netatmo_api import NetatmoAPI
+from google_nest_api import GoogleNestAPI
+from google_nest_pubsub import GoogleNestPubSubClient
 from database import DeviceDatabase
 from slack_notifier import SlackNotifier
 from webhook_server import WebhookServer, parse_webhook_event
 from cloudflare_tunnel import CloudflareTunnel
 from chart_generator import ChartGenerator
+from garbage_notifier import GarbageNotifier
+
+# Optional: Local chart generator for Raspberry Pi (requires matplotlib)
+try:
+    from local_chart_generator import LocalChartGenerator, SlackImageUploader
+    LOCAL_CHART_AVAILABLE = True
+except ImportError:
+    LOCAL_CHART_AVAILABLE = False
 
 
 # Global flag for graceful shutdown
@@ -36,6 +46,12 @@ def signal_handler(signum, frame):
 
 def setup_logging(log_level='INFO', log_file=None):
     """Setup logging configuration."""
+    # Clear any existing handlers (set by imported modules like matplotlib)
+    # This is needed because basicConfig does nothing if handlers already exist
+    root = logging.getLogger()
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+
     handlers = [logging.StreamHandler(sys.stdout)]
 
     if log_file:
@@ -150,6 +166,41 @@ class SwitchBotMonitor:
             except Exception as e:
                 logging.error("Failed to initialize Netatmo API: %s", e)
 
+        # Initialize Google Nest API (optional)
+        self.nest_api = None
+        self.nest_pubsub = None
+        nest_config = config.get('google_nest', {})
+        logging.debug("Google Nest config: enabled=%s", nest_config.get('enabled', False))
+        if nest_config.get('enabled', False):
+            try:
+                self.nest_api = GoogleNestAPI(
+                    project_id=nest_config['project_id'],
+                    client_id=nest_config['client_id'],
+                    client_secret=nest_config['client_secret'],
+                    refresh_token=nest_config['refresh_token'],
+                    credentials_file=nest_config.get('credentials_file')
+                )
+                logging.info("Google Nest API initialized")
+
+                # Initialize Pub/Sub client for real-time events
+                pubsub_config = nest_config.get('pubsub', {})
+                logging.debug("Google Nest Pub/Sub config: enabled=%s", pubsub_config.get('enabled', False))
+                if pubsub_config.get('enabled', False):
+                    self.nest_pubsub = GoogleNestPubSubClient(
+                        gcp_project_id=pubsub_config['gcp_project_id'],
+                        subscription_id=pubsub_config['subscription_id'],
+                        client_id=nest_config['client_id'],
+                        client_secret=nest_config['client_secret'],
+                        refresh_token=nest_config['refresh_token'],
+                        device_access_project_id=nest_config['project_id'],
+                        credentials_file=nest_config.get('credentials_file')
+                    )
+                    self.nest_pubsub.set_event_callback(self.handle_nest_event)
+                    logging.info("Google Nest Pub/Sub client initialized")
+
+            except Exception as e:
+                logging.error("Failed to initialize Google Nest API: %s", e)
+
         # Initialize database
         db_path = config.get('database', {}).get('path', 'device_states.db')
         self.db = DeviceDatabase(db_path)
@@ -169,11 +220,36 @@ class SwitchBotMonitor:
         # Chart generator
         self.chart_generator = ChartGenerator()
 
+        # Local chart generator (for Raspberry Pi with matplotlib)
+        graph_config = config.get('graph_report', {})
+        self.use_local_chart = graph_config.get('use_local_chart', False)
+        self.local_chart_generator = None
+        self.slack_uploader = None
+
+        if self.use_local_chart:
+            if LOCAL_CHART_AVAILABLE:
+                self.local_chart_generator = LocalChartGenerator()
+                bot_token = slack_config.get('bot_token')
+                channel_id = slack_config.get('channels', {}).get('atmos_graph')
+                if bot_token and channel_id:
+                    self.slack_uploader = SlackImageUploader(bot_token, channel_id)
+                    logging.info("Local chart generator enabled (matplotlib + Slack file upload)")
+                else:
+                    logging.warning("Local chart enabled but bot_token or channel_id missing, falling back to URL mode")
+                    self.use_local_chart = False
+            else:
+                logging.warning("Local chart enabled but matplotlib not available, falling back to URL mode")
+                self.use_local_chart = False
+
         # Graph report tracking (5-minute interval)
         self.last_graph_report = 0
 
         # Netatmo polling tracking (separate interval)
         self.last_netatmo_poll = 0
+
+        # Google Nest polling tracking
+        self.last_nest_poll = 0
+        self.nest_device_states = {}  # Track device connectivity states
 
         # Outdoor alert tracking (to avoid duplicate alerts)
         self.last_alerts = {
@@ -184,6 +260,18 @@ class SwitchBotMonitor:
         }
         # Minimum interval between same type alerts (seconds)
         self.alert_cooldown = 3600  # 1 hour
+
+        # Initialize garbage collection notifier
+        garbage_config = config.get('garbage_collection', {})
+        self.garbage_notifier = GarbageNotifier(garbage_config, self.slack)
+        if garbage_config.get('enabled', False):
+            logging.info("Garbage collection notifier enabled")
+
+        # Track last garbage notification to avoid duplicates
+        self.last_garbage_notification = {
+            'morning': None,  # date of last morning notification
+            'evening': None,  # date of last evening notification
+        }
 
     def setup_webhook_server(self):
         """Setup webhook server and Cloudflare tunnel."""
@@ -486,6 +574,152 @@ class SwitchBotMonitor:
             if self.config.get('slack', {}).get('notify_errors', False):
                 self.slack.notify_error("Netatmo: {}".format(str(e)))
 
+    def poll_nest(self):
+        """Poll Google Nest devices for status updates."""
+        if not self.nest_api:
+            return
+
+        logging.info("Polling Google Nest devices...")
+
+        try:
+            devices = self.nest_api.poll_all_devices()
+
+            for device in devices:
+                device_id = device.get('device_id')
+                device_name = device.get('device_name', 'Unknown')
+                device_type = 'Doorbell' if device.get('is_doorbell') else 'Camera'
+                connectivity = device.get('connectivity_status', 'UNKNOWN')
+                online = device.get('online', True)
+
+                # Get previous state
+                prev_state = self.nest_device_states.get(device_id, {})
+                prev_connectivity = prev_state.get('connectivity_status')
+
+                # Save current state
+                self.nest_device_states[device_id] = {
+                    'device_name': device_name,
+                    'device_type': device_type,
+                    'connectivity_status': connectivity,
+                    'online': online,
+                    'is_doorbell': device.get('is_doorbell', False),
+                    'has_motion': device.get('has_motion', False),
+                    'has_person': device.get('has_person', False),
+                }
+
+                # Log status
+                if device.get('error'):
+                    logging.warning(
+                        "[Nest] %s: Error - %s",
+                        device_name, device.get('error')
+                    )
+                else:
+                    logging.info(
+                        "[Nest] %s (%s): connectivity=%s, motion=%s, person=%s",
+                        device_name, device_type, connectivity,
+                        device.get('has_motion'), device.get('has_person')
+                    )
+
+                # Check for connectivity changes
+                if prev_connectivity and prev_connectivity != connectivity:
+                    logging.info(
+                        "[Nest] %s connectivity changed: %s -> %s",
+                        device_name, prev_connectivity, connectivity
+                    )
+                    self.slack.notify_nest_device_status(
+                        device_name, device_type, device
+                    )
+
+            logging.info("Google Nest polling complete: %d devices", len(devices))
+
+        except Exception as e:
+            logging.error("Error polling Google Nest: %s", e)
+            if self.config.get('slack', {}).get('notify_errors', False):
+                self.slack.notify_error("Google Nest: {}".format(str(e)))
+
+    def handle_nest_event(self, event_type, device_id, device_name, event_data):
+        """
+        Handle Google Nest Pub/Sub event.
+
+        Args:
+            event_type: Event type ('chime', 'motion', 'person', 'sound')
+            device_id: Device ID
+            device_name: Device name
+            event_data: Event data dict
+        """
+        logging.info(
+            "[Nest Pub/Sub] Event: %s from %s (%s)",
+            event_type, device_name, device_id
+        )
+
+        try:
+            # Get clip preview URL if available
+            preview_url = event_data.get('preview_url')
+            clip_downloaded = False
+            clip_path = None
+
+            logging.debug("Event data keys: %s", list(event_data.keys()))
+            logging.debug("Preview URL: %s", preview_url[:50] if preview_url else None)
+
+            # Try to download clip preview
+            if preview_url and self.nest_pubsub:
+                import tempfile
+                clip_path = tempfile.mktemp(suffix='.mp4')
+                result = self.nest_pubsub.download_clip_preview(preview_url, clip_path)
+                if result:
+                    clip_downloaded = True
+                    logging.info("Downloaded clip preview to %s", clip_path)
+                else:
+                    clip_path = None
+
+            # Build notification message
+            event_messages = {
+                'chime': 'ドアベルが押されました',
+                'motion': '動きを検知',
+                'person': '人物を検知',
+                'sound': '音を検知',
+            }
+            message = event_messages.get(event_type, event_type)
+            timestamp = datetime.now().strftime('%H:%M')
+            comment = "[{}] {}\n{}".format(timestamp, message, device_name)
+
+            # Upload clip to Slack if available
+            if clip_downloaded and clip_path:
+                filename = "nest_{}_{}.mp4".format(
+                    event_type,
+                    datetime.now().strftime('%Y%m%d_%H%M%S')
+                )
+                success = self.slack.upload_file(
+                    'home_security',
+                    file_path=clip_path,
+                    filename=filename,
+                    title="{} - {}".format(device_name, message),
+                    initial_comment=comment
+                )
+                if success:
+                    logging.info("Uploaded clip to Slack")
+                else:
+                    logging.warning("Failed to upload clip, sending text notification")
+                    # Fallback to text notification
+                    if event_type == 'chime':
+                        self.slack.notify_nest_doorbell(device_name, event_type)
+                    else:
+                        self.slack.notify_nest_camera_event(device_name, event_type)
+
+                # Cleanup temp file
+                try:
+                    os.remove(clip_path)
+                except Exception:
+                    pass
+            else:
+                # No clip available, send text notification
+                if event_type == 'chime':
+                    self.slack.notify_nest_doorbell(device_name, event_type)
+                elif event_type in ['motion', 'person', 'sound']:
+                    self.slack.notify_nest_camera_event(device_name, event_type)
+
+        except Exception as e:
+            logging.error("Error handling Nest event: %s", e)
+
     def _can_send_alert(self, alert_type, device_id):
         """Check if we can send an alert (respecting cooldown)."""
         now = time.time()
@@ -718,12 +952,14 @@ class SwitchBotMonitor:
     def send_graph_report(self):
         """
         Send graph report for all sensor devices to #atmos-graph channel.
-        Shows data from today midnight to now.
+        Shows data from the last 24 hours.
         Separates outdoor and indoor sensors.
         Includes both SwitchBot and Netatmo sensors.
         """
-        date_str = datetime.now().strftime('%Y-%m-%d')
-        logging.info("Generating graph report for %s...", date_str)
+        logging.info("Generating graph report for last 24 hours...")
+
+        # Label for chart titles
+        date_str = "直近24h"
 
         # Get all SwitchBot sensor devices
         sensor_devices = self.db.get_all_sensor_devices()
@@ -744,11 +980,11 @@ class SwitchBotMonitor:
             device_name = device['device_name']
 
             try:
-                # Get today's data
-                sensor_data = self.db.get_sensor_data_for_date(device_id, date_str)
+                # Get last 24 hours data
+                sensor_data = self.db.get_sensor_data_last_24h(device_id)
 
                 if not sensor_data:
-                    logging.debug("No data for %s on %s", device_name, date_str)
+                    logging.debug("No data for %s in last 24 hours", device_name)
                     continue
 
                 # Separate outdoor vs indoor
@@ -788,11 +1024,11 @@ class SwitchBotMonitor:
                 is_outdoor = device.get('is_outdoor', False)
 
                 try:
-                    # Get today's data
-                    sensor_data = self.db.get_netatmo_data_for_date(device_id, date_str)
+                    # Get last 24 hours data
+                    sensor_data = self.db.get_netatmo_data_last_24h(device_id)
 
                     if not sensor_data:
-                        logging.debug("No Netatmo data for %s on %s", device_name, date_str)
+                        logging.debug("No Netatmo data for %s in last 24 hours", device_name)
                         continue
 
                     display_name = "[NA] " + device_name
@@ -841,8 +1077,18 @@ class SwitchBotMonitor:
             return
 
         # Generate charts
-        # Get interval for downsampling from config
-        interval_seconds = self.config.get('monitor', {}).get('interval_seconds', 1800)
+        # Get interval for downsampling from graph_report config (default: 10 minutes)
+        interval_seconds = self.config.get('graph_report', {}).get('downsample_seconds', 600)
+
+        # Use local chart generator if enabled (Raspberry Pi mode)
+        if self.use_local_chart and self.local_chart_generator and self.slack_uploader:
+            self._send_local_chart_report(
+                outdoor_data, indoor_data, wind_data, rain_data,
+                pressure_data, noise_data, date_str, interval_seconds
+            )
+            return
+
+        # Default: Use QuickChart.io URL mode
         chart_urls = {}
         try:
             # Outdoor charts (temperature, humidity)
@@ -920,6 +1166,200 @@ class SwitchBotMonitor:
         except Exception as e:
             logging.error("Error sending graph report: %s", e)
 
+    def _send_local_chart_report(self, outdoor_data, indoor_data, wind_data, rain_data,
+                                  pressure_data, noise_data, date_str, interval_seconds,
+                                  devices_summary=None):
+        """
+        Generate charts locally using matplotlib and upload to Slack.
+        Used for Raspberry Pi deployment where QuickChart.io may be unreliable.
+
+        Generates two sets of charts:
+        - 12h charts with current downsample interval
+        - 24h charts with 30-minute downsample interval
+        """
+        logging.info("Generating local charts with matplotlib...")
+
+        # Time configurations
+        # 12h: use configured interval (default 10 min)
+        # 24h: use 30 min interval
+        interval_12h = interval_seconds
+        interval_24h = 1800  # 30 minutes
+
+        chart_paths = {}
+        try:
+            # Generate 12h and 24h charts for each metric
+            for hours, interval, suffix in [(12, interval_12h, '_12h'), (24, interval_24h, '_24h')]:
+                # Outdoor charts
+                if outdoor_data:
+                    chart_paths['outdoor_temp' + suffix] = self.local_chart_generator.generate_multi_device_chart(
+                        outdoor_data, 'temperature', date_str,
+                        interval_seconds=interval, hours_range=hours, chart_type='outdoor'
+                    )
+                    chart_paths['outdoor_humidity' + suffix] = self.local_chart_generator.generate_multi_device_chart(
+                        outdoor_data, 'humidity', date_str,
+                        interval_seconds=interval, hours_range=hours, chart_type='outdoor'
+                    )
+
+                # Indoor charts
+                if indoor_data:
+                    chart_paths['indoor_temp' + suffix] = self.local_chart_generator.generate_multi_device_chart(
+                        indoor_data, 'temperature', date_str,
+                        interval_seconds=interval, hours_range=hours, chart_type='indoor'
+                    )
+                    chart_paths['indoor_humidity' + suffix] = self.local_chart_generator.generate_multi_device_chart(
+                        indoor_data, 'humidity', date_str,
+                        interval_seconds=interval, hours_range=hours, chart_type='indoor'
+                    )
+                    chart_paths['co2' + suffix] = self.local_chart_generator.generate_multi_device_chart(
+                        indoor_data, 'co2', date_str,
+                        interval_seconds=interval, hours_range=hours, chart_type='indoor'
+                    )
+
+                # Pressure chart
+                if pressure_data:
+                    chart_paths['pressure' + suffix] = self.local_chart_generator.generate_multi_device_chart(
+                        pressure_data, 'pressure', date_str,
+                        interval_seconds=interval, hours_range=hours, chart_type='pressure'
+                    )
+
+                # Noise chart
+                if noise_data:
+                    chart_paths['noise' + suffix] = self.local_chart_generator.generate_multi_device_chart(
+                        noise_data, 'noise', date_str,
+                        interval_seconds=interval, hours_range=hours, chart_type='noise'
+                    )
+
+                # Wind charts
+                if wind_data:
+                    chart_paths['wind' + suffix] = self.local_chart_generator.generate_wind_chart(
+                        wind_data, date_str,
+                        interval_seconds=interval, hours_range=hours
+                    )
+                    chart_paths['wind_direction' + suffix] = self.local_chart_generator.generate_wind_direction_chart(
+                        wind_data, date_str,
+                        interval_seconds=interval, hours_range=hours
+                    )
+
+                # Rain chart
+                if rain_data:
+                    chart_paths['rain' + suffix] = self.local_chart_generator.generate_rain_chart(
+                        rain_data, date_str,
+                        interval_seconds=interval, hours_range=hours
+                    )
+
+                logging.debug("Generated local %dh charts", hours)
+
+        except Exception as e:
+            logging.error("Error generating local charts: %s", e)
+            return
+
+        # Post summary text first
+        try:
+            summary_text = self._build_sensor_summary(outdoor_data, indoor_data, wind_data, rain_data)
+            if summary_text:
+                self.slack_uploader.post_message(summary_text)
+                logging.debug("Posted sensor summary to Slack")
+        except Exception as e:
+            logging.error("Error posting summary: %s", e)
+
+        # Upload charts to Slack
+        try:
+            results = self.slack_uploader.upload_charts(chart_paths, date_str)
+            success_count = sum(1 for v in results.values() if v)
+            total_count = len(results)
+            logging.info("Uploaded %d/%d charts to Slack", success_count, total_count)
+        except Exception as e:
+            logging.error("Error uploading charts to Slack: %s", e)
+            # Cleanup any remaining files
+            for path in chart_paths.values():
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+
+    def _build_sensor_summary(self, outdoor_data, indoor_data, wind_data, rain_data):
+        """Build sensor summary text for Slack posting."""
+        from datetime import datetime
+        current_time = datetime.now().strftime('%H:%M')
+
+        lines = ['*環境センサーレポート ({})* '.format(current_time)]
+
+        # Outdoor section
+        if outdoor_data:
+            lines.append('*屋外*')
+            for device_name, data in outdoor_data.items():
+                if data:
+                    latest = data[-1]
+                    temp = latest.get('temperature')
+                    humidity = latest.get('humidity')
+                    co2 = latest.get('co2')
+                    pressure = latest.get('pressure')
+                    noise = latest.get('noise')
+                    wind = latest.get('wind_strength')
+                    gust = latest.get('gust_strength')
+
+                    parts = []
+                    if temp is not None:
+                        parts.append('{}°C'.format(temp))
+                    if humidity is not None:
+                        parts.append('{}%'.format(humidity))
+                    if co2 is not None:
+                        parts.append('{}ppm'.format(co2))
+                    if pressure is not None:
+                        parts.append('{}hPa'.format(pressure))
+                    if noise is not None:
+                        parts.append('{}dB'.format(noise))
+
+                    line = '{}: {}'.format(device_name, ' / '.join(parts) if parts else '-')
+                    lines.append(line)
+
+        # Wind data (separate because it's a different structure)
+        if wind_data:
+            for device_name, data in wind_data.items():
+                if data:
+                    latest = data[-1]
+                    wind_kmh = latest.get('wind_strength')
+                    gust_kmh = latest.get('gust_strength')
+                    wind_ms = round(wind_kmh / 3.6, 1) if wind_kmh else None
+                    gust_ms = round(gust_kmh / 3.6, 1) if gust_kmh else None
+
+                    if wind_ms is not None:
+                        line = '{}: {}m/s'.format(device_name, wind_ms)
+                        if gust_ms is not None:
+                            line += ' (突風:{}m/s)'.format(gust_ms)
+                        lines.append(line)
+
+        # Indoor section
+        if indoor_data:
+            lines.append('')
+            lines.append('*屋内*')
+            for device_name, data in indoor_data.items():
+                if data:
+                    latest = data[-1]
+                    temp = latest.get('temperature')
+                    humidity = latest.get('humidity')
+                    co2 = latest.get('co2')
+                    pressure = latest.get('pressure')
+                    noise = latest.get('noise')
+
+                    parts = []
+                    if temp is not None:
+                        parts.append('{}°C'.format(temp))
+                    if humidity is not None:
+                        parts.append('{}%'.format(humidity))
+                    if co2 is not None:
+                        parts.append('{}ppm'.format(co2))
+                    if pressure is not None:
+                        parts.append('{}hPa'.format(pressure))
+                    if noise is not None:
+                        parts.append('{}dB'.format(noise))
+
+                    line = '{}: {}'.format(device_name, ' / '.join(parts) if parts else '-')
+                    lines.append(line)
+
+        return '\n'.join(lines) if len(lines) > 1 else None
+
     def check_graph_report(self):
         """Check if it's time to send graph report (every N minutes)."""
         report_config = self.config.get('graph_report', {})
@@ -933,6 +1373,35 @@ class SwitchBotMonitor:
         if now - self.last_graph_report >= interval_seconds:
             self.send_graph_report()
             self.last_graph_report = now
+
+    def check_garbage_notification(self):
+        """
+        Check if it's time to send garbage collection notification.
+        - evening_hour: Tomorrow's garbage (evening reminder)
+        - morning_hour: Today's garbage (morning reminder)
+        """
+        if not self.garbage_notifier.enabled:
+            return
+
+        now = datetime.now()
+        today = now.date()
+
+        evening_hour = self.garbage_notifier.evening_hour
+        morning_hour = self.garbage_notifier.morning_hour
+
+        # Check evening notification - about tomorrow
+        if now.hour == evening_hour and now.minute < 5:
+            if self.last_garbage_notification['evening'] != today:
+                logging.info("Sending evening garbage notification (tomorrow)")
+                if self.garbage_notifier.send_notification(is_tomorrow=True):
+                    self.last_garbage_notification['evening'] = today
+
+        # Check morning notification - about today
+        if now.hour == morning_hour and now.minute < 5:
+            if self.last_garbage_notification['morning'] != today:
+                logging.info("Sending morning garbage notification (today)")
+                if self.garbage_notifier.send_notification(is_tomorrow=False):
+                    self.last_garbage_notification['morning'] = today
 
     def run(self):
         """Main monitoring loop."""
@@ -975,6 +1444,11 @@ class SwitchBotMonitor:
         if self.netatmo_api:
             logging.info("Netatmo polling interval: %d seconds", netatmo_interval)
 
+        # Get Google Nest polling interval (default: 5 minutes)
+        nest_interval = self.config.get('google_nest', {}).get('interval_seconds', 300)
+        if self.nest_api:
+            logging.info("Google Nest polling interval: %d seconds", nest_interval)
+
         # Get graph report interval
         graph_interval = self.config.get('graph_report', {}).get('interval_minutes', 5)
         logging.info("Graph report interval: %d minutes", graph_interval)
@@ -986,6 +1460,26 @@ class SwitchBotMonitor:
         if self.netatmo_api:
             self.poll_netatmo()
             self.last_netatmo_poll = time.time()
+
+        # Initial Google Nest poll
+        if self.nest_api:
+            self.poll_nest()
+            self.last_nest_poll = time.time()
+
+            # Start Pub/Sub client for real-time events
+            if self.nest_pubsub:
+                # Set device names for better event notifications
+                device_names = {
+                    dev_id: state.get('device_name', dev_id)
+                    for dev_id, state in self.nest_device_states.items()
+                }
+                self.nest_pubsub.set_device_names(device_names)
+
+                # Start Pub/Sub long polling
+                pubsub_config = self.config.get('google_nest', {}).get('pubsub', {})
+                poll_timeout = pubsub_config.get('poll_timeout_seconds', 60)
+                self.nest_pubsub.start(poll_timeout=poll_timeout)
+                logging.info("Google Nest Pub/Sub client started (timeout=%ds)", poll_timeout)
 
         # Send initial graph report immediately after first poll
         if self.config.get('graph_report', {}).get('enabled', False):
@@ -1010,8 +1504,16 @@ class SwitchBotMonitor:
                 self.poll_netatmo()
                 self.last_netatmo_poll = now
 
+            # Check if it's time to poll Google Nest
+            if self.nest_api and now - self.last_nest_poll >= nest_interval:
+                self.poll_nest()
+                self.last_nest_poll = now
+
             # Check for graph report (every 5 minutes)
             self.check_graph_report()
+
+            # Check for garbage collection notification (20:00 and 6:00)
+            self.check_garbage_notification()
 
             # Sleep briefly
             time.sleep(1)
@@ -1022,6 +1524,10 @@ class SwitchBotMonitor:
     def shutdown(self):
         """Clean shutdown."""
         logging.info("Shutting down...")
+
+        # Stop Pub/Sub client
+        if self.nest_pubsub:
+            self.nest_pubsub.stop()
 
         # Stop webhook server
         if self.webhook_server:

@@ -11,12 +11,31 @@
         "credentials_file": null,
         "interval_seconds": 600
     },
+    "google_nest": {
+        "enabled": false,
+        "project_id": "YOUR_DEVICE_ACCESS_PROJECT_ID",
+        "client_id": "YOUR_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+        "client_secret": "YOUR_OAUTH_CLIENT_SECRET",
+        "refresh_token": "YOUR_REFRESH_TOKEN",
+        "credentials_file": null,
+        "interval_seconds": 300,
+        "pubsub": {
+            "enabled": false,
+            "gcp_project_id": "YOUR_GCP_PROJECT_ID",
+            "subscription_id": "YOUR_PUBSUB_SUBSCRIPTION_ID",
+            "poll_timeout_seconds": 60
+        }
+    },
     "slack": {
+        "bot_token": "xoxb-YOUR-BOT-TOKEN",
         "channels": {
             "home_security": "https://hooks.slack.com/services/YOUR/SECURITY/WEBHOOK",
             "atmos_update": "https://hooks.slack.com/services/YOUR/ATMOS/WEBHOOK",
             "atmos_graph": "https://hooks.slack.com/services/YOUR/GRAPH/WEBHOOK",
             "outdoor_alert": "https://hooks.slack.com/services/YOUR/OUTDOOR/WEBHOOK"
+        },
+        "channel_ids": {
+            "home_security": "C0123456789"
         },
         "enabled": true,
         "notify_startup": true,
@@ -63,10 +82,42 @@
     },
     "graph_report": {
         "enabled": true,
-        "interval_minutes": 5
+        "interval_minutes": 5,
+        "downsample_seconds": 600,
+        "use_local_chart": false
     },
     "logging": {
         "level": "INFO",
         "file": null
+    },
+    "garbage_collection": {
+        "enabled": true,
+        "channel_id": "C0WDQD1UN",
+        "image_dir": "garbage_images",
+        "evening_hour": 20,
+        "morning_hour": 6,
+        "schedule": {
+            "monday": "燃やすごみ",
+            "tuesday": "プラスチック資源",
+            "wednesday": "なし",
+            "thursday": "缶・びん・ペットボトル",
+            "friday": "燃やすごみ",
+            "saturday": "なし",
+            "sunday": "なし"
+        },
+        "monthly_schedule": {
+            "古紙・段ボール": {
+                "weekday": "sunday",
+                "weeks": [2, 4]
+            },
+            "粗大ごみ": {
+                "weekday": "saturday",
+                "weeks": [1]
+            }
+        },
+        "additional_rules": {
+            "燃やすごみ": ["燃えないごみ", "スプレー缶", "電池類"],
+            "缶・びん・ペットボトル": ["小さな金属類"]
+        }
     }
 }

@@ -6,7 +6,7 @@ Python 3.7+ compatible, uses only standard library.
 import sqlite3
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 class DeviceDatabase:
@@ -425,6 +425,45 @@ class DeviceDatabase:
             for row in rows
         ]
 
+    def get_sensor_data_last_24h(self, device_id):
+        """
+        Get sensor data for the last 24 hours.
+
+        Args:
+            device_id: Device ID
+
+        Returns:
+            list: List of sensor readings for the last 24 hours
+        """
+        now = datetime.now()
+        start_time = now - timedelta(hours=24)
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT * FROM sensor_timeseries
+            WHERE device_id = ?
+            AND recorded_at >= ?
+            ORDER BY recorded_at ASC
+        ''', (device_id, start_time.strftime('%Y-%m-%d %H:%M:%S')))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [
+            {
+                'device_id': row['device_id'],
+                'device_name': row['device_name'],
+                'recorded_at': row['recorded_at'],
+                'temperature': row['temperature'],
+                'humidity': row['humidity'],
+                'co2': row['co2'],
+                'battery': row['battery']
+            }
+            for row in rows
+        ]
+
     def get_sensor_data_range(self, device_id, start_date, end_date):
         """
         Get sensor data for a date range.
@@ -658,6 +697,70 @@ class DeviceDatabase:
             AND date(recorded_at) = date(?)
             ORDER BY recorded_at ASC
         ''', (device_id, date_str))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        result = []
+        for row in rows:
+            item = {
+                'device_id': row['device_id'],
+                'device_name': row['device_name'],
+                'station_name': row['station_name'],
+                'module_type': row['module_type'],
+                'is_outdoor': bool(row['is_outdoor']),
+                'recorded_at': row['recorded_at'],
+                'temperature': row['temperature'],
+                'humidity': row['humidity'],
+                'co2': row['co2'],
+                'pressure': row['pressure'],
+                'noise': row['noise'],
+                'battery_percent': row['battery_percent']
+            }
+            # Add wind/rain fields if they exist in the schema
+            try:
+                item['wind_strength'] = row['wind_strength']
+                item['wind_angle'] = row['wind_angle']
+                item['gust_strength'] = row['gust_strength']
+                item['gust_angle'] = row['gust_angle']
+                item['rain'] = row['rain']
+                item['rain_1h'] = row['rain_1h']
+                item['rain_24h'] = row['rain_24h']
+            except (IndexError, KeyError):
+                # Old schema without wind/rain columns
+                item['wind_strength'] = None
+                item['wind_angle'] = None
+                item['gust_strength'] = None
+                item['gust_angle'] = None
+                item['rain'] = None
+                item['rain_1h'] = None
+                item['rain_24h'] = None
+            result.append(item)
+
+        return result
+
+    def get_netatmo_data_last_24h(self, device_id):
+        """
+        Get Netatmo sensor data for the last 24 hours.
+
+        Args:
+            device_id: Device ID
+
+        Returns:
+            list: List of sensor readings for the last 24 hours
+        """
+        now = datetime.now()
+        start_time = now - timedelta(hours=24)
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT * FROM netatmo_timeseries
+            WHERE device_id = ?
+            AND recorded_at >= ?
+            ORDER BY recorded_at ASC
+        ''', (device_id, start_time.strftime('%Y-%m-%d %H:%M:%S')))
 
         rows = cursor.fetchall()
         conn.close()
