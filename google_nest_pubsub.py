@@ -150,6 +150,9 @@ class GoogleNestPubSubClient:
 
     def _get_subscription_path(self):
         """Get full subscription path."""
+        # If subscription_id is already a full path, use it as-is
+        if self.subscription_id.startswith("projects/"):
+            return self.subscription_id
         return "projects/{}/subscriptions/{}".format(
             self.gcp_project_id, self.subscription_id
         )
