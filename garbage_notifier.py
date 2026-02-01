@@ -32,6 +32,10 @@ class GarbageNotifier:
         self.additional_rules = config.get('additional_rules', {})
         self.slack = slack_notifier
 
+        # Notification times (default: 20:00 for evening, 6:00 for morning)
+        self.evening_hour = config.get('evening_hour', 20)
+        self.morning_hour = config.get('morning_hour', 6)
+
         # Make image_dir absolute if relative
         if self.image_dir and not os.path.isabs(self.image_dir):
             script_dir = os.path.dirname(os.path.abspath(__file__))

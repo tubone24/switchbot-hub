@@ -94,6 +94,8 @@
         "enabled": true,
         "channel_id": "C0WDQD1UN",
         "image_dir": "garbage_images",
+        "evening_hour": 20,
+        "morning_hour": 6,
         "schedule": {
             "monday": "燃やすごみ",
             "tuesday": "プラスチック資源",

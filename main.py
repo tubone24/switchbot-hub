@@ -1377,8 +1377,8 @@ class SwitchBotMonitor:
     def check_garbage_notification(self):
         """
         Check if it's time to send garbage collection notification.
-        - 20:00: Tomorrow's garbage (evening reminder)
-        - 6:00: Today's garbage (morning reminder)
+        - evening_hour: Tomorrow's garbage (evening reminder)
+        - morning_hour: Today's garbage (morning reminder)
         """
         if not self.garbage_notifier.enabled:
             return
@@ -1386,15 +1386,18 @@ class SwitchBotMonitor:
         now = datetime.now()
         today = now.date()
 
-        # Check evening notification (20:00) - about tomorrow
-        if now.hour == 20 and now.minute < 5:
+        evening_hour = self.garbage_notifier.evening_hour
+        morning_hour = self.garbage_notifier.morning_hour
+
+        # Check evening notification - about tomorrow
+        if now.hour == evening_hour and now.minute < 5:
             if self.last_garbage_notification['evening'] != today:
                 logging.info("Sending evening garbage notification (tomorrow)")
                 if self.garbage_notifier.send_notification(is_tomorrow=True):
                     self.last_garbage_notification['evening'] = today
 
-        # Check morning notification (6:00) - about today
-        if now.hour == 6 and now.minute < 5:
+        # Check morning notification - about today
+        if now.hour == morning_hour and now.minute < 5:
             if self.last_garbage_notification['morning'] != today:
                 logging.info("Sending morning garbage notification (today)")
                 if self.garbage_notifier.send_notification(is_tomorrow=False):
