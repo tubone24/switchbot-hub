@@ -23,6 +23,7 @@ from slack_notifier import SlackNotifier
 from webhook_server import WebhookServer, parse_webhook_event
 from cloudflare_tunnel import CloudflareTunnel
 from chart_generator import ChartGenerator
+from garbage_notifier import GarbageNotifier
 
 # Optional: Local chart generator for Raspberry Pi (requires matplotlib)
 try:
@@ -259,6 +260,18 @@ class SwitchBotMonitor:
         }
         # Minimum interval between same type alerts (seconds)
         self.alert_cooldown = 3600  # 1 hour
+
+        # Initialize garbage collection notifier
+        garbage_config = config.get('garbage_collection', {})
+        self.garbage_notifier = GarbageNotifier(garbage_config, self.slack)
+        if garbage_config.get('enabled', False):
+            logging.info("Garbage collection notifier enabled")
+
+        # Track last garbage notification to avoid duplicates
+        self.last_garbage_notification = {
+            'morning': None,  # date of last morning notification
+            'evening': None,  # date of last evening notification
+        }
 
     def setup_webhook_server(self):
         """Setup webhook server and Cloudflare tunnel."""
@@ -1361,6 +1374,32 @@ class SwitchBotMonitor:
             self.send_graph_report()
             self.last_graph_report = now
 
+    def check_garbage_notification(self):
+        """
+        Check if it's time to send garbage collection notification.
+        - 20:00: Tomorrow's garbage (evening reminder)
+        - 6:00: Today's garbage (morning reminder)
+        """
+        if not self.garbage_notifier.enabled:
+            return
+
+        now = datetime.now()
+        today = now.date()
+
+        # Check evening notification (20:00) - about tomorrow
+        if now.hour == 20 and now.minute < 5:
+            if self.last_garbage_notification['evening'] != today:
+                logging.info("Sending evening garbage notification (tomorrow)")
+                if self.garbage_notifier.send_notification(is_tomorrow=True):
+                    self.last_garbage_notification['evening'] = today
+
+        # Check morning notification (6:00) - about today
+        if now.hour == 6 and now.minute < 5:
+            if self.last_garbage_notification['morning'] != today:
+                logging.info("Sending morning garbage notification (today)")
+                if self.garbage_notifier.send_notification(is_tomorrow=False):
+                    self.last_garbage_notification['morning'] = today
+
     def run(self):
         """Main monitoring loop."""
         global running
@@ -1469,6 +1508,9 @@ class SwitchBotMonitor:
 
             # Check for graph report (every 5 minutes)
             self.check_graph_report()
+
+            # Check for garbage collection notification (20:00 and 6:00)
+            self.check_garbage_notification()
 
             # Sleep briefly
             time.sleep(1)

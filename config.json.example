@@ -89,5 +89,23 @@
     "logging": {
         "level": "INFO",
         "file": null
+    },
+    "garbage_collection": {
+        "enabled": true,
+        "channel_id": "C0WDQD1UN",
+        "image_dir": "garbage_images",
+        "schedule": {
+            "monday": "燃やすごみ",
+            "tuesday": "プラスチック資源",
+            "wednesday": "なし",
+            "thursday": "缶・びん・ペットボトル",
+            "friday": "燃やすごみ",
+            "saturday": "なし",
+            "sunday": "なし"
+        },
+        "additional_rules": {
+            "燃やすごみ": ["燃えないごみ", "スプレー缶", "電池類"],
+            "缶・びん・ペットボトル": ["小さな金属類"]
+        }
     }
 }
