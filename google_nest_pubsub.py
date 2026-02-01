@@ -349,23 +349,25 @@ class GoogleNestPubSubClient:
                 logging.debug("Unknown event type: %s", event_key)
                 continue
 
-            logging.info(
-                "[Pub/Sub] %s event from %s: %s",
-                event_type, device_name, event_key
-            )
-
             # Handle clip preview correlation
             event_session_id = event_value.get('eventSessionId')
+
+            logging.info(
+                "[Pub/Sub] %s event from %s: %s (session=%s)",
+                event_type, device_name, event_key, event_session_id
+            )
 
             if event_type == 'clip_preview':
                 # Store clip preview for correlation with other events
                 preview_url = event_value.get('previewUrl', '')
+                logging.debug("ClipPreview received: session=%s, url=%s",
+                              event_session_id, preview_url[:50] if preview_url else None)
                 if event_session_id and preview_url:
                     self._event_sessions[event_session_id] = {
                         'preview_url': preview_url,
                         'timestamp': time.time()
                     }
-                    logging.debug("Stored clip preview for session %s", event_session_id)
+                    logging.info("Stored clip preview for session %s", event_session_id)
                 continue  # Don't send separate notification for clip preview
 
             # Build event data
@@ -380,9 +382,12 @@ class GoogleNestPubSubClient:
             }
 
             # Check for associated clip preview
+            logging.debug("Looking for clip preview: session=%s, stored_sessions=%s",
+                          event_session_id, list(self._event_sessions.keys()))
             if event_session_id and event_session_id in self._event_sessions:
                 session_data = self._event_sessions[event_session_id]
                 event_data['preview_url'] = session_data.get('preview_url')
+                logging.info("Found clip preview for session %s", event_session_id)
 
             # Invoke callback
             if self._event_callback:
