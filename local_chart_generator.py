@@ -138,6 +138,7 @@ def downsample_sensor_data(sensor_data, interval_seconds):
         rains = [r['rain'] for r in readings if r.get('rain') is not None]
         rains_1h = [r['rain_1h'] for r in readings if r.get('rain_1h') is not None]
         rains_24h = [r['rain_24h'] for r in readings if r.get('rain_24h') is not None]
+        light_levels = [r['light_level'] for r in readings if r.get('light_level') is not None]
 
         result.append({
             'recorded_at': representative_timestamp,
@@ -152,6 +153,7 @@ def downsample_sensor_data(sensor_data, interval_seconds):
             'rain': round(sum(rains) / len(rains), 1) if rains else None,
             'rain_1h': round(sum(rains_1h) / len(rains_1h), 1) if rains_1h else None,
             'rain_24h': round(sum(rains_24h) / len(rains_24h), 1) if rains_24h else None,
+            'light_level': round(sum(light_levels) / len(light_levels)) if light_levels else None,
         })
 
     return result
@@ -354,7 +356,8 @@ class LocalChartGenerator:
             'gust_strength': '突風 (m/s)',
             'rain': '雨量 (mm)',
             'rain_1h': '雨量/1h (mm)',
-            'rain_24h': '雨量/24h (mm)'
+            'rain_24h': '雨量/24h (mm)',
+            'light_level': '照度'
         }
 
         # Build title with time range and date range
