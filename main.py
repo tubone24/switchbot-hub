@@ -169,6 +169,7 @@ class SwitchBotMonitor:
         self.nest_api = None
         self.nest_pubsub = None
         nest_config = config.get('google_nest', {})
+        logging.debug("Google Nest config: enabled=%s", nest_config.get('enabled', False))
         if nest_config.get('enabled', False):
             try:
                 self.nest_api = GoogleNestAPI(
@@ -182,6 +183,7 @@ class SwitchBotMonitor:
 
                 # Initialize Pub/Sub client for real-time events
                 pubsub_config = nest_config.get('pubsub', {})
+                logging.debug("Google Nest Pub/Sub config: enabled=%s", pubsub_config.get('enabled', False))
                 if pubsub_config.get('enabled', False):
                     self.nest_pubsub = GoogleNestPubSubClient(
                         gcp_project_id=pubsub_config['gcp_project_id'],
