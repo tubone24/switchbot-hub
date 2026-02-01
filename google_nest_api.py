@@ -515,3 +515,4 @@ if __name__ == '__main__':
             'client_secret': 'YOUR_OAUTH_CLIENT_SECRET',
             'refresh_token': 'YOUR_REFRESH_TOKEN'
         }, indent=2))
+        print("\nTo get a refresh token, run: python google_nest_auth.py")

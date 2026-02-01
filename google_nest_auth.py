@@ -89,13 +89,19 @@ def get_authorization_url(project_id, client_id, redirect_uri):
     """Generate the authorization URL for Google Nest Device Access."""
     base_url = "https://nestservices.google.com/partnerconnections/{}/auth".format(project_id)
 
+    # Scopes: SDM API for device access, Pub/Sub for real-time events
+    scopes = ' '.join([
+        'https://www.googleapis.com/auth/sdm.service',
+        'https://www.googleapis.com/auth/pubsub'
+    ])
+
     params = {
         'redirect_uri': redirect_uri,
         'client_id': client_id,
         'access_type': 'offline',
         'prompt': 'consent',
         'response_type': 'code',
-        'scope': 'https://www.googleapis.com/auth/sdm.service'
+        'scope': scopes
     }
 
     return "{}?{}".format(base_url, urlencode(params))
