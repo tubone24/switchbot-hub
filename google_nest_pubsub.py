@@ -148,6 +148,39 @@ class GoogleNestPubSubClient:
         if not self.access_token or time.time() >= self.token_expires_at:
             self._refresh_access_token()
 
+    def download_clip_preview(self, preview_url, output_path=None):
+        """
+        Download clip preview MP4 from previewUrl.
+
+        Args:
+            preview_url: Preview URL from event data
+            output_path: Optional path to save file
+
+        Returns:
+            bytes or str: MP4 bytes if no output_path, else output_path
+        """
+        self._ensure_valid_token()
+
+        headers = {
+            'Authorization': 'Bearer {}'.format(self.access_token)
+        }
+
+        try:
+            response = requests.get(preview_url, headers=headers, timeout=30)
+            response.raise_for_status()
+
+            if output_path:
+                with open(output_path, 'wb') as f:
+                    f.write(response.content)
+                logging.debug("Downloaded clip preview to %s", output_path)
+                return output_path
+
+            return response.content
+
+        except requests.exceptions.RequestException as e:
+            logging.error("Failed to download clip preview: %s", e)
+            return None
+
     def _get_subscription_path(self):
         """Get full subscription path."""
         # If subscription_id is already a full path, use it as-is

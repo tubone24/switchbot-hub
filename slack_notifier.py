@@ -40,6 +40,10 @@ class SlackNotifier:
         """
         self.enabled = config.get('enabled', True)
         self.channels = config.get('channels', {})
+        self.bot_token = config.get('bot_token')
+
+        # Channel IDs for file uploads (different from webhook URLs)
+        self.channel_ids = config.get('channel_ids', {})
 
         # Backwards compatibility: if 'webhook_url' is provided, use for all
         if 'webhook_url' in config and not self.channels:
@@ -84,6 +88,112 @@ class SlackNotifier:
             return True
         except requests.exceptions.RequestException as e:
             print("[Slack] Failed to send to {}: {}".format(channel, e))
+            return False
+
+    def upload_file(self, channel, file_path=None, file_content=None, filename=None,
+                    title=None, initial_comment=None):
+        """
+        Upload a file to Slack channel using Bot Token.
+
+        Args:
+            channel: Channel key ('home_security', etc.) or channel ID
+            file_path: Path to file to upload
+            file_content: File content as bytes (alternative to file_path)
+            filename: Filename for the upload
+            title: Title for the file
+            initial_comment: Comment to add with the file
+
+        Returns:
+            bool: True if uploaded successfully
+        """
+        if not self.enabled:
+            return True
+
+        if not self.bot_token:
+            print("[Slack] Bot token not configured for file upload")
+            return False
+
+        # Get channel ID
+        channel_id = self.channel_ids.get(channel, channel)
+
+        headers = {
+            'Authorization': 'Bearer {}'.format(self.bot_token)
+        }
+
+        try:
+            # Step 1: Get upload URL
+            if file_path:
+                import os
+                file_size = os.path.getsize(file_path)
+                if not filename:
+                    filename = os.path.basename(file_path)
+            elif file_content:
+                file_size = len(file_content)
+                if not filename:
+                    filename = 'file'
+            else:
+                print("[Slack] No file provided")
+                return False
+
+            # Get upload URL using files.getUploadURLExternal
+            url_response = requests.post(
+                'https://slack.com/api/files.getUploadURLExternal',
+                headers=headers,
+                data={
+                    'filename': filename,
+                    'length': file_size
+                },
+                timeout=30
+            )
+            url_data = url_response.json()
+
+            if not url_data.get('ok'):
+                print("[Slack] Failed to get upload URL: {}".format(url_data.get('error')))
+                return False
+
+            upload_url = url_data['upload_url']
+            file_id = url_data['file_id']
+
+            # Step 2: Upload file to URL
+            if file_path:
+                with open(file_path, 'rb') as f:
+                    upload_response = requests.post(
+                        upload_url,
+                        files={'file': f},
+                        timeout=60
+                    )
+            else:
+                upload_response = requests.post(
+                    upload_url,
+                    files={'file': (filename, file_content)},
+                    timeout=60
+                )
+
+            if upload_response.status_code != 200:
+                print("[Slack] Failed to upload file: {}".format(upload_response.status_code))
+                return False
+
+            # Step 3: Complete upload with files.completeUploadExternal
+            complete_response = requests.post(
+                'https://slack.com/api/files.completeUploadExternal',
+                headers=headers,
+                json={
+                    'files': [{'id': file_id, 'title': title or filename}],
+                    'channel_id': channel_id,
+                    'initial_comment': initial_comment or ''
+                },
+                timeout=30
+            )
+            complete_data = complete_response.json()
+
+            if not complete_data.get('ok'):
+                print("[Slack] Failed to complete upload: {}".format(complete_data.get('error')))
+                return False
+
+            return True
+
+        except requests.exceptions.RequestException as e:
+            print("[Slack] Failed to upload file: {}".format(e))
             return False
 
     def get_device_category(self, device_type):

@@ -27,12 +27,15 @@
         }
     },
     "slack": {
-        "bot_token": null,
+        "bot_token": "xoxb-YOUR-BOT-TOKEN",
         "channels": {
             "home_security": "https://hooks.slack.com/services/YOUR/SECURITY/WEBHOOK",
             "atmos_update": "https://hooks.slack.com/services/YOUR/ATMOS/WEBHOOK",
             "atmos_graph": "https://hooks.slack.com/services/YOUR/GRAPH/WEBHOOK",
             "outdoor_alert": "https://hooks.slack.com/services/YOUR/OUTDOOR/WEBHOOK"
+        },
+        "channel_ids": {
+            "home_security": "C0123456789"
         },
         "enabled": true,
         "notify_startup": true,

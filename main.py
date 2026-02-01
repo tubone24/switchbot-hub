@@ -640,21 +640,66 @@ class SwitchBotMonitor:
 
         try:
             # Get clip preview URL if available
-            clip_url = event_data.get('preview_url')
+            preview_url = event_data.get('preview_url')
+            clip_downloaded = False
+            clip_path = None
 
-            # Send Slack notification based on event type
-            if event_type == 'chime':
-                # Doorbell chime event
-                self.slack.notify_nest_doorbell(
-                    device_name, event_type,
-                    event_data={'clip_url': clip_url} if clip_url else None
+            # Try to download clip preview
+            if preview_url and self.nest_pubsub:
+                import tempfile
+                clip_path = tempfile.mktemp(suffix='.mp4')
+                result = self.nest_pubsub.download_clip_preview(preview_url, clip_path)
+                if result:
+                    clip_downloaded = True
+                    logging.info("Downloaded clip preview to %s", clip_path)
+                else:
+                    clip_path = None
+
+            # Build notification message
+            event_messages = {
+                'chime': 'ドアベルが押されました',
+                'motion': '動きを検知',
+                'person': '人物を検知',
+                'sound': '音を検知',
+            }
+            message = event_messages.get(event_type, event_type)
+            timestamp = datetime.now().strftime('%H:%M')
+            comment = "[{}] {}\n{}".format(timestamp, message, device_name)
+
+            # Upload clip to Slack if available
+            if clip_downloaded and clip_path:
+                filename = "nest_{}_{}.mp4".format(
+                    event_type,
+                    datetime.now().strftime('%Y%m%d_%H%M%S')
                 )
-            elif event_type in ['motion', 'person', 'sound']:
-                # Camera event
-                self.slack.notify_nest_camera_event(
-                    device_name, event_type,
-                    clip_url=clip_url
+                success = self.slack.upload_file(
+                    'home_security',
+                    file_path=clip_path,
+                    filename=filename,
+                    title="{} - {}".format(device_name, message),
+                    initial_comment=comment
                 )
+                if success:
+                    logging.info("Uploaded clip to Slack")
+                else:
+                    logging.warning("Failed to upload clip, sending text notification")
+                    # Fallback to text notification
+                    if event_type == 'chime':
+                        self.slack.notify_nest_doorbell(device_name, event_type)
+                    else:
+                        self.slack.notify_nest_camera_event(device_name, event_type)
+
+                # Cleanup temp file
+                try:
+                    os.remove(clip_path)
+                except Exception:
+                    pass
+            else:
+                # No clip available, send text notification
+                if event_type == 'chime':
+                    self.slack.notify_nest_doorbell(device_name, event_type)
+                elif event_type in ['motion', 'person', 'sound']:
+                    self.slack.notify_nest_camera_event(device_name, event_type)
 
         except Exception as e:
             logging.error("Error handling Nest event: %s", e)
