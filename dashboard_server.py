@@ -193,7 +193,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _is_outdoor_sensor(self, device_name):
         """Check if device is an outdoor sensor."""
-        outdoor_keywords = ['outdoor', 'Outdoor', 'OUTDOOR']
+        outdoor_keywords = ['防水温湿度計', '屋外', 'Outdoor', 'outdoor']
         for keyword in outdoor_keywords:
             if keyword in device_name:
                 return True
@@ -214,7 +214,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="refresh" content="30">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SwitchBot/Netatmo Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -606,11 +605,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         }
 
         function renderLineChart(canvasId, devices, metric, colors) {
-            const canvas = document.getElementById(canvasId);
-            if (!canvas) return;
+            if (!document.getElementById(canvasId)) return;
 
             const datasets = [];
-            let allLabels = [];
 
             devices.forEach((device, index) => {
                 if (!device.history || device.history.length === 0) return;
@@ -638,7 +635,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             if (datasets.length === 0) return;
 
-            new Chart(canvas, {
+            createChart(canvasId, {
                 type: 'line',
                 data: { datasets },
                 options: {
@@ -671,8 +668,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         }
 
         function renderWindChart(canvasId, devices) {
-            const canvas = document.getElementById(canvasId);
-            if (!canvas) return;
+            if (!document.getElementById(canvasId)) return;
 
             const device = devices[0];
             if (!device || !device.history) return;
@@ -691,7 +687,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     y: h.gust_strength / 3.6  // Convert km/h to m/s
                 }));
 
-            new Chart(canvas, {
+            createChart(canvasId, {
                 type: 'line',
                 data: {
                     datasets: [
@@ -741,8 +737,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         }
 
         function renderRainChart(canvasId, devices) {
-            const canvas = document.getElementById(canvasId);
-            if (!canvas) return;
+            if (!document.getElementById(canvasId)) return;
 
             const device = devices[0];
             if (!device || !device.history) return;
@@ -761,7 +756,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     y: h.rain_24h
                 }));
 
-            new Chart(canvas, {
+            createChart(canvasId, {
                 type: 'line',
                 data: {
                     datasets: [
@@ -821,8 +816,41 @@ class DashboardHandler(BaseHTTPRequestHandler):
             });
         }
 
+        // Store chart instances for cleanup
+        const chartInstances = {};
+
+        function destroyAllCharts() {
+            Object.keys(chartInstances).forEach(key => {
+                if (chartInstances[key]) {
+                    chartInstances[key].destroy();
+                    delete chartInstances[key];
+                }
+            });
+        }
+
+        // Override Chart creation to track instances
+        function createChart(canvasId, config) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return null;
+
+            // Destroy existing chart on this canvas
+            if (chartInstances[canvasId]) {
+                chartInstances[canvasId].destroy();
+            }
+
+            const chart = new Chart(canvas, config);
+            chartInstances[canvasId] = chart;
+            return chart;
+        }
+
         // Load on page ready
         loadDashboard();
+
+        // Auto-refresh every 30 seconds (data only, no page reload)
+        setInterval(() => {
+            console.log('Refreshing data...');
+            loadDashboard();
+        }, 30000);
     </script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 </body>

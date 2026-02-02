@@ -288,6 +288,10 @@ cp config.json.example config.json
         "enabled": true,
         "interval_minutes": 5
     },
+    "dashboard": {
+        "enabled": true,
+        "port": 7777
+    },
     "logging": {
         "level": "INFO",
         "file": null
