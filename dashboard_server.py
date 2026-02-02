@@ -660,9 +660,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             time: {
                                 unit: 'hour',
                                 displayFormats: { hour: 'HH:mm' }
-                            },
-                            adapters: {
-                                date: { locale: 'ja-JP' }
                             }
                         },
                         y: {
