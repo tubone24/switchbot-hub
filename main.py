@@ -24,6 +24,7 @@ from webhook_server import WebhookServer, parse_webhook_event
 from cloudflare_tunnel import CloudflareTunnel
 from chart_generator import ChartGenerator
 from garbage_notifier import GarbageNotifier
+from dashboard_server import DashboardServer
 
 # Optional: Local chart generator for Raspberry Pi (requires matplotlib)
 try:
@@ -272,6 +273,24 @@ class SwitchBotMonitor:
             'morning': None,  # date of last morning notification
             'evening': None,  # date of last evening notification
         }
+
+        # Dashboard server
+        self.dashboard_server = None
+
+    def setup_dashboard_server(self):
+        """Setup dashboard HTTP server."""
+        dashboard_config = self.config.get('dashboard', {})
+        if not dashboard_config.get('enabled', False):
+            logging.info("Dashboard server disabled")
+            return False
+
+        port = dashboard_config.get('port', 7777)
+
+        self.dashboard_server = DashboardServer(port=port, db=self.db)
+        self.dashboard_server.start()
+
+        logging.info("Dashboard available at http://localhost:%d", port)
+        return True
 
     def setup_webhook_server(self):
         """Setup webhook server and Cloudflare tunnel."""
@@ -1451,6 +1470,9 @@ class SwitchBotMonitor:
             len(self.device_map), counts['polling'], counts['webhook'], counts['ignore']
         )
 
+        # Setup dashboard server
+        self.setup_dashboard_server()
+
         # Setup webhook server
         webhook_enabled = self.setup_webhook_server()
 
@@ -1558,6 +1580,10 @@ class SwitchBotMonitor:
         # Stop Pub/Sub client
         if self.nest_pubsub:
             self.nest_pubsub.stop()
+
+        # Stop dashboard server
+        if self.dashboard_server:
+            self.dashboard_server.stop()
 
         # Stop webhook server
         if self.webhook_server:

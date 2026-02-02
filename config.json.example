@@ -86,6 +86,10 @@
         "downsample_seconds": 600,
         "use_local_chart": false
     },
+    "dashboard": {
+        "enabled": true,
+        "port": 7777
+    },
     "logging": {
         "level": "INFO",
         "file": null
