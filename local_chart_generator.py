@@ -994,6 +994,7 @@ class SlackImageUploader:
             'wind': '🌬️ 風速・突風',
             'wind_direction': '🧭 風向',
             'rain': '🌧️ 雨量',
+            'light_level': '💡 照度',
         }
 
         # Order: 12h charts first, then 24h charts (grouped by metric type)
@@ -1003,19 +1004,19 @@ class SlackImageUploader:
             'indoor_temp_12h', 'indoor_humidity_12h', 'co2_12h',
             'pressure_12h', 'noise_12h',
             'wind_12h', 'wind_direction_12h',
-            'rain_12h',
+            'rain_12h', 'light_level_12h',
             # 24h charts
             'outdoor_temp_24h', 'outdoor_humidity_24h',
             'indoor_temp_24h', 'indoor_humidity_24h', 'co2_24h',
             'pressure_24h', 'noise_24h',
             'wind_24h', 'wind_direction_24h',
-            'rain_24h',
+            'rain_24h', 'light_level_24h',
             # Legacy keys (without time suffix)
             'outdoor_temp', 'outdoor_humidity',
             'indoor_temp', 'indoor_humidity', 'co2',
             'pressure', 'noise',
             'wind', 'wind_direction',
-            'rain'
+            'rain', 'light_level'
         ]
 
         results = {}
