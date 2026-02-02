@@ -16,6 +16,7 @@ SwitchBotデバイス、Netatmo Weather Station、Google Nest（ドアベル/カ
 - **Quick Tunnel対応**: ドメイン不要でWebhook受信可能（URLは自動更新）
 - **JST表示**: グラフの時間軸は日本時間
 - **ゴミ収集通知**: 曜日ごとのゴミ出しリマインダーを画像付きで通知
+- **Webダッシュボード**: LANからアクセス可能なリアルタイムダッシュボード（30秒自動更新）
 
 ## 対応デバイス
 
@@ -466,6 +467,43 @@ sudo apt-get install fonts-ipaexfont fonts-ipafont
 pip install matplotlib==3.5.3
 ```
 
+### dashboard
+
+| 項目 | 説明 |
+|------|------|
+| `enabled` | Webダッシュボードの有効/無効 |
+| `port` | HTTPサーバーのポート番号（デフォルト7777） |
+
+**設定例:**
+
+```json
+{
+    "dashboard": {
+        "enabled": true,
+        "port": 7777
+    }
+}
+```
+
+**アクセス方法:**
+
+ブラウザで `http://<Raspberry PiのIP>:7777/` にアクセス
+
+**機能:**
+- 全センサーの現在値をカード形式で表示
+- 24時間分の時系列グラフ（温度・湿度・CO2・気圧・騒音・風速・雨量）
+- 30秒ごとに自動リフレッシュ
+- ダークテーマのレスポンシブUI
+- スマートフォン対応
+
+**エンドポイント:**
+
+| パス | 説明 |
+|------|------|
+| `/` | ダッシュボードHTML |
+| `/api/data` | センサーデータJSON API |
+| `/health` | ヘルスチェック |
+
 ### logging
 
 | 項目 | 説明 |
@@ -743,6 +781,7 @@ flowchart TB
         db --> security["#home-security<br/>防犯通知（日本語）"]
         db --> atmos["#atmos-update<br/>環境変化通知"]
         db --> atmosGraph["#atmos-graph<br/>5分ごとグラフ"]
+        db --> dashboard["Webダッシュボード<br/>port 7777<br/>30秒自動更新"]
     end
 
     subgraph external["外部API"]
@@ -815,6 +854,7 @@ switchbot-hub/
 ├── cloudflare_tunnel.py    # Cloudflare Tunnel管理
 ├── chart_generator.py      # QuickChart.ioでグラフ生成
 ├── local_chart_generator.py # matplotlibでローカルグラフ生成（Raspberry Pi向け）
+├── dashboard_server.py     # Webダッシュボード HTTPサーバー
 ├── garbage_images/         # ゴミ種類ごとの画像
 ├── config.json.example     # 設定サンプル
 └── config.json             # 設定ファイル（要作成）
