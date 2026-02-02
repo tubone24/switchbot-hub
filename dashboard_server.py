@@ -25,12 +25,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
         """Override to use logging module instead of stderr."""
         logging.debug("Dashboard: %s - %s", self.address_string(), format % args)
 
+    # Security device types
+    SECURITY_DEVICE_TYPES = [
+        'Smart Lock', 'Smart Lock Pro', 'Lock',
+        'Contact Sensor', 'Motion Sensor',
+        'Keypad', 'Keypad Touch',
+        'Video Doorbell'
+    ]
+
+    # Track last event ID for polling
+    last_event_id = 0
+
     def do_GET(self):
         """Handle GET requests."""
         if self.path == '/':
             self._serve_dashboard()
         elif self.path == '/api/data':
             self._serve_api_data()
+        elif self.path.startswith('/api/events'):
+            self._serve_api_events()
         elif self.path == '/health':
             self._serve_health()
         else:
@@ -58,6 +71,100 @@ class DashboardHandler(BaseHTTPRequestHandler):
         response = json.dumps(data, ensure_ascii=False, indent=2)
         self.wfile.write(response.encode('utf-8'))
 
+    def _serve_api_events(self):
+        """Serve recent security events for toast notifications."""
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+
+        # Parse since parameter from query string
+        since = None
+        if '?' in self.path:
+            query = self.path.split('?')[1]
+            for param in query.split('&'):
+                if param.startswith('since='):
+                    since = param.split('=')[1]
+
+        events = self._get_security_events(since)
+        response = json.dumps(events, ensure_ascii=False)
+        self.wfile.write(response.encode('utf-8'))
+
+    def _get_security_events(self, since=None):
+        """Get recent security events from device history."""
+        if self.db is None:
+            return {'events': []}
+
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+
+            # Get events from the last hour (or since timestamp)
+            if since:
+                cursor.execute('''
+                    SELECT id, device_id, device_name, device_type, status_json, recorded_at
+                    FROM device_history
+                    WHERE device_type IN (?, ?, ?, ?, ?, ?, ?, ?)
+                    AND recorded_at > ?
+                    ORDER BY recorded_at DESC
+                    LIMIT 50
+                ''', (*self.SECURITY_DEVICE_TYPES, since))
+            else:
+                cursor.execute('''
+                    SELECT id, device_id, device_name, device_type, status_json, recorded_at
+                    FROM device_history
+                    WHERE device_type IN (?, ?, ?, ?, ?, ?, ?, ?)
+                    AND recorded_at >= datetime('now', 'localtime', '-1 hour')
+                    ORDER BY recorded_at DESC
+                    LIMIT 50
+                ''', self.SECURITY_DEVICE_TYPES)
+
+            rows = cursor.fetchall()
+            conn.close()
+
+            events = []
+            for row in rows:
+                status = json.loads(row['status_json']) if row['status_json'] else {}
+                event = {
+                    'id': row['id'],
+                    'device_name': row['device_name'],
+                    'device_type': row['device_type'],
+                    'status': status,
+                    'recorded_at': row['recorded_at'],
+                    'message': self._format_security_message(row['device_name'], row['device_type'], status)
+                }
+                events.append(event)
+
+            return {'events': events}
+
+        except Exception as e:
+            logging.error("Error getting security events: %s", e)
+            return {'events': [], 'error': str(e)}
+
+    def _format_security_message(self, device_name, device_type, status):
+        """Format security event message in Japanese."""
+        if 'Lock' in device_type:
+            lock_state = status.get('lockState', '')
+            if lock_state == 'locked':
+                return '🔒 {} が施錠されました'.format(device_name)
+            elif lock_state == 'unlocked':
+                return '🔓 {} が解錠されました'.format(device_name)
+            elif lock_state == 'jammed':
+                return '⚠️ {} がジャム状態です'.format(device_name)
+        elif device_type == 'Contact Sensor':
+            open_state = status.get('openState', '')
+            if open_state == 'open':
+                return '🚪 {} が開きました'.format(device_name)
+            elif open_state == 'close':
+                return '🚪 {} が閉まりました'.format(device_name)
+        elif device_type == 'Motion Sensor':
+            if status.get('moveDetected', False):
+                return '👁 {} が動きを検知しました'.format(device_name)
+        elif device_type == 'Video Doorbell':
+            return '🔔 {} が押されました'.format(device_name)
+
+        return '{} の状態が変化しました'.format(device_name)
+
     def _get_sensor_data(self):
         """Get sensor data from database."""
         if self.db is None:
@@ -67,6 +174,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         result = {
             'timestamp': now.isoformat(),
             'last_updated': None,
+            'security': [],
             'switchbot': {
                 'outdoor': [],
                 'indoor': []
@@ -78,6 +186,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 'rain': []
             }
         }
+
+        # Get security device states
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT device_id, device_name, device_type, status_json, updated_at
+                FROM device_states
+                WHERE device_type IN (?, ?, ?, ?, ?, ?, ?, ?)
+                ORDER BY device_name
+            ''', self.SECURITY_DEVICE_TYPES)
+
+            rows = cursor.fetchall()
+            conn.close()
+
+            for row in rows:
+                status = json.loads(row['status_json']) if row['status_json'] else {}
+                device_data = {
+                    'device_id': row['device_id'],
+                    'device_name': row['device_name'],
+                    'device_type': row['device_type'],
+                    'status': status,
+                    'updated_at': row['updated_at'],
+                    'display_status': self._get_security_display_status(row['device_type'], status)
+                }
+                result['security'].append(device_data)
+
+        except Exception as e:
+            logging.error("Error getting security devices: %s", e)
 
         last_updated = None
 
@@ -191,6 +329,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         return result
 
+    def _get_security_display_status(self, device_type, status):
+        """Get display-friendly status for security devices."""
+        if 'Lock' in device_type:
+            lock_state = status.get('lockState', '')
+            if lock_state == 'locked':
+                return {'text': '施錠', 'icon': '🔒', 'color': 'green'}
+            elif lock_state == 'unlocked':
+                return {'text': '解錠', 'icon': '🔓', 'color': 'red'}
+            elif lock_state == 'jammed':
+                return {'text': 'ジャム', 'icon': '⚠️', 'color': 'orange'}
+            return {'text': '不明', 'icon': '❓', 'color': 'gray'}
+
+        elif device_type == 'Contact Sensor':
+            open_state = status.get('openState', '')
+            if open_state == 'open':
+                return {'text': '開', 'icon': '🚪', 'color': 'orange'}
+            elif open_state == 'close':
+                return {'text': '閉', 'icon': '🚪', 'color': 'green'}
+            return {'text': '不明', 'icon': '❓', 'color': 'gray'}
+
+        elif device_type == 'Motion Sensor':
+            if status.get('moveDetected', False):
+                return {'text': '検知中', 'icon': '👁', 'color': 'orange'}
+            return {'text': '待機中', 'icon': '👁', 'color': 'green'}
+
+        elif device_type == 'Video Doorbell':
+            return {'text': '待機中', 'icon': '🔔', 'color': 'green'}
+
+        return {'text': '-', 'icon': '📱', 'color': 'gray'}
+
     def _is_outdoor_sensor(self, device_name):
         """Check if device is an outdoor sensor."""
         outdoor_keywords = ['防水温湿度計', '屋外', 'Outdoor', 'outdoor']
@@ -299,6 +467,136 @@ class DashboardHandler(BaseHTTPRequestHandler):
         .wind { color: #78909c; }
         .rain { color: #5c6bc0; }
         .light { color: #ffd54f; }
+        /* Security status colors */
+        .status-green { color: #4caf50; }
+        .status-red { color: #f44336; }
+        .status-orange { color: #ff9800; }
+        .status-gray { color: #9e9e9e; }
+        /* Security card */
+        .security-card {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 15px 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+        .security-card .icon {
+            font-size: 2em;
+        }
+        .security-card .info {
+            flex: 1;
+        }
+        .security-card .info .name {
+            font-size: 0.95em;
+            color: #4fc3f7;
+            margin-bottom: 4px;
+        }
+        .security-card .info .type {
+            font-size: 0.75em;
+            color: #888;
+        }
+        .security-card .status {
+            font-size: 1.2em;
+            font-weight: bold;
+            text-align: right;
+        }
+        .security-card .updated {
+            font-size: 0.7em;
+            color: #666;
+            margin-top: 4px;
+        }
+        /* Filter bar */
+        .filter-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #16213e;
+            border-radius: 8px;
+        }
+        .filter-bar label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            padding: 6px 12px;
+            border-radius: 20px;
+            background: #1a1a2e;
+            font-size: 0.85em;
+            transition: background 0.2s;
+        }
+        .filter-bar label:hover {
+            background: #2a2a4e;
+        }
+        .filter-bar input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+        }
+        /* Toast notifications */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-width: 350px;
+        }
+        .toast {
+            background: #263238;
+            border-left: 4px solid #4fc3f7;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            animation: slideIn 0.3s ease;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+        .toast.security {
+            border-left-color: #ff9800;
+        }
+        .toast .icon {
+            font-size: 1.5em;
+        }
+        .toast .content {
+            flex: 1;
+        }
+        .toast .message {
+            font-size: 0.9em;
+            margin-bottom: 4px;
+        }
+        .toast .time {
+            font-size: 0.75em;
+            color: #888;
+        }
+        .toast .close {
+            background: none;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            font-size: 1.2em;
+            padding: 0;
+            line-height: 1;
+        }
+        .toast .close:hover {
+            color: #fff;
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slideOut {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
+        }
+        .toast.hiding {
+            animation: slideOut 0.3s ease forwards;
+        }
         .chart-container {
             background: #16213e;
             border-radius: 12px;
@@ -340,9 +638,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
     </style>
 </head>
 <body>
+    <!-- Toast notification container -->
+    <div class="toast-container" id="toastContainer"></div>
+
     <div class="header">
         <h1>Environment Dashboard</h1>
         <div class="last-updated" id="lastUpdated">Loading...</div>
+    </div>
+
+    <!-- Filter bar -->
+    <div class="filter-bar" id="filterBar">
+        <label><input type="checkbox" id="filter-security" checked> 🔐 Security</label>
+        <label><input type="checkbox" id="filter-outdoor" checked> 🌳 Outdoor</label>
+        <label><input type="checkbox" id="filter-indoor" checked> 🏠 Indoor</label>
+        <label><input type="checkbox" id="filter-wind" checked> 🌬️ Wind</label>
+        <label><input type="checkbox" id="filter-rain" checked> 🌧️ Rain</label>
     </div>
 
     <div id="content">
@@ -354,11 +664,33 @@ class DashboardHandler(BaseHTTPRequestHandler):
         Chart.defaults.color = '#888';
         Chart.defaults.borderColor = '#333';
 
+        // Store current data for filtering
+        let currentData = null;
+
+        // Filter state
+        const filters = {
+            security: true,
+            outdoor: true,
+            indoor: true,
+            wind: true,
+            rain: true
+        };
+
+        // Initialize filter checkboxes
+        document.querySelectorAll('.filter-bar input').forEach(checkbox => {
+            const key = checkbox.id.replace('filter-', '');
+            checkbox.addEventListener('change', () => {
+                filters[key] = checkbox.checked;
+                if (currentData) renderDashboard(currentData);
+            });
+        });
+
         // Fetch data and render dashboard
         async function loadDashboard() {
             try {
                 const response = await fetch('/api/data');
                 const data = await response.json();
+                currentData = data;
                 renderDashboard(data);
             } catch (error) {
                 document.getElementById('content').innerHTML =
@@ -372,6 +704,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return date.toLocaleString('ja-JP', {
                 month: 'numeric',
                 day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        function formatTimeShort(isoString) {
+            if (!isoString) return '-';
+            const date = new Date(isoString);
+            return date.toLocaleString('ja-JP', {
                 hour: '2-digit',
                 minute: '2-digit'
             });
@@ -398,31 +739,40 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             let html = '';
 
+            // Security section
+            if (filters.security && data.security && data.security.length > 0) {
+                html += renderSecuritySection(data.security);
+            }
+
             // Outdoor section
-            const outdoorDevices = [
-                ...data.switchbot.outdoor.map(d => ({...d, source: 'SB'})),
-                ...data.netatmo.outdoor.map(d => ({...d, source: 'NA'}))
-            ];
-            if (outdoorDevices.length > 0) {
-                html += renderSection('Outdoor', outdoorDevices, ['temperature', 'humidity']);
+            if (filters.outdoor) {
+                const outdoorDevices = [
+                    ...data.switchbot.outdoor.map(d => ({...d, source: 'SB'})),
+                    ...data.netatmo.outdoor.map(d => ({...d, source: 'NA'}))
+                ];
+                if (outdoorDevices.length > 0) {
+                    html += renderSection('Outdoor', outdoorDevices, ['temperature', 'humidity']);
+                }
             }
 
             // Indoor section
-            const indoorDevices = [
-                ...data.switchbot.indoor.map(d => ({...d, source: 'SB'})),
-                ...data.netatmo.indoor.map(d => ({...d, source: 'NA'}))
-            ];
-            if (indoorDevices.length > 0) {
-                html += renderSection('Indoor', indoorDevices, ['temperature', 'humidity', 'co2', 'pressure', 'noise']);
+            if (filters.indoor) {
+                const indoorDevices = [
+                    ...data.switchbot.indoor.map(d => ({...d, source: 'SB'})),
+                    ...data.netatmo.indoor.map(d => ({...d, source: 'NA'}))
+                ];
+                if (indoorDevices.length > 0) {
+                    html += renderSection('Indoor', indoorDevices, ['temperature', 'humidity', 'co2', 'pressure', 'noise']);
+                }
             }
 
             // Wind section
-            if (data.netatmo.wind.length > 0) {
+            if (filters.wind && data.netatmo.wind.length > 0) {
                 html += renderWindSection(data.netatmo.wind);
             }
 
             // Rain section
-            if (data.netatmo.rain.length > 0) {
+            if (filters.rain && data.netatmo.rain.length > 0) {
                 html += renderRainSection(data.netatmo.rain);
             }
 
@@ -432,6 +782,32 @@ class DashboardHandler(BaseHTTPRequestHandler):
             setTimeout(() => {
                 renderCharts(data);
             }, 100);
+        }
+
+        function renderSecuritySection(devices) {
+            let html = '<div class="section" data-section="security">';
+            html += '<h2>🔐 Security</h2>';
+            html += '<div class="cards">';
+
+            for (const device of devices) {
+                const ds = device.display_status || {};
+                const statusColor = 'status-' + (ds.color || 'gray');
+
+                html += '<div class="security-card">';
+                html += '<div class="icon">' + (ds.icon || '📱') + '</div>';
+                html += '<div class="info">';
+                html += '<div class="name">' + device.device_name + '</div>';
+                html += '<div class="type">' + device.device_type + '</div>';
+                html += '</div>';
+                html += '<div class="status ' + statusColor + '">';
+                html += (ds.text || '-');
+                html += '<div class="updated">' + formatTimeShort(device.updated_at) + '</div>';
+                html += '</div>';
+                html += '</div>';
+            }
+
+            html += '</div></div>';
+            return html;
         }
 
         function renderSection(title, devices, metrics) {
@@ -570,36 +946,40 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 'rgba(236, 64, 122, 1)',   // pink
             ];
 
-            // Outdoor charts
-            const outdoorDevices = [
-                ...data.switchbot.outdoor.map(d => ({...d, source: 'SB'})),
-                ...data.netatmo.outdoor.map(d => ({...d, source: 'NA'}))
-            ];
-            if (outdoorDevices.length > 0) {
-                renderLineChart('chart-outdoor-temp', outdoorDevices, 'temperature', colors);
-                renderLineChart('chart-outdoor-humidity', outdoorDevices, 'humidity', colors);
+            // Outdoor charts (if filter enabled)
+            if (filters.outdoor) {
+                const outdoorDevices = [
+                    ...data.switchbot.outdoor.map(d => ({...d, source: 'SB'})),
+                    ...data.netatmo.outdoor.map(d => ({...d, source: 'NA'}))
+                ];
+                if (outdoorDevices.length > 0) {
+                    renderLineChart('chart-outdoor-temp', outdoorDevices, 'temperature', colors);
+                    renderLineChart('chart-outdoor-humidity', outdoorDevices, 'humidity', colors);
+                }
             }
 
-            // Indoor charts
-            const indoorDevices = [
-                ...data.switchbot.indoor.map(d => ({...d, source: 'SB'})),
-                ...data.netatmo.indoor.map(d => ({...d, source: 'NA'}))
-            ];
-            if (indoorDevices.length > 0) {
-                renderLineChart('chart-indoor-temp', indoorDevices, 'temperature', colors);
-                renderLineChart('chart-indoor-humidity', indoorDevices, 'humidity', colors);
-                renderLineChart('chart-indoor-co2', indoorDevices, 'co2', colors);
-                renderLineChart('chart-indoor-pressure', indoorDevices, 'pressure', colors);
-                renderLineChart('chart-indoor-noise', indoorDevices, 'noise', colors);
+            // Indoor charts (if filter enabled)
+            if (filters.indoor) {
+                const indoorDevices = [
+                    ...data.switchbot.indoor.map(d => ({...d, source: 'SB'})),
+                    ...data.netatmo.indoor.map(d => ({...d, source: 'NA'}))
+                ];
+                if (indoorDevices.length > 0) {
+                    renderLineChart('chart-indoor-temp', indoorDevices, 'temperature', colors);
+                    renderLineChart('chart-indoor-humidity', indoorDevices, 'humidity', colors);
+                    renderLineChart('chart-indoor-co2', indoorDevices, 'co2', colors);
+                    renderLineChart('chart-indoor-pressure', indoorDevices, 'pressure', colors);
+                    renderLineChart('chart-indoor-noise', indoorDevices, 'noise', colors);
+                }
             }
 
-            // Wind chart
-            if (data.netatmo.wind.length > 0) {
+            // Wind chart (if filter enabled)
+            if (filters.wind && data.netatmo.wind.length > 0) {
                 renderWindChart('chart-wind', data.netatmo.wind);
             }
 
-            // Rain chart
-            if (data.netatmo.rain.length > 0) {
+            // Rain chart (if filter enabled)
+            if (filters.rain && data.netatmo.rain.length > 0) {
                 renderRainChart('chart-rain', data.netatmo.rain);
             }
         }
@@ -843,14 +1223,99 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return chart;
         }
 
+        // ========== Toast Notification System ==========
+        let lastEventTimestamp = null;
+        const shownEventIds = new Set();
+
+        function showToast(message, icon = '🔔', type = 'security') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+
+            const now = new Date();
+            const timeStr = now.toLocaleString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+            toast.innerHTML = `
+                <div class="icon">${icon}</div>
+                <div class="content">
+                    <div class="message">${message}</div>
+                    <div class="time">${timeStr}</div>
+                </div>
+                <button class="close" onclick="this.parentElement.remove()">×</button>
+            `;
+
+            container.appendChild(toast);
+
+            // Auto-remove after 10 seconds
+            setTimeout(() => {
+                if (toast.parentElement) {
+                    toast.classList.add('hiding');
+                    setTimeout(() => toast.remove(), 300);
+                }
+            }, 10000);
+        }
+
+        async function pollSecurityEvents() {
+            try {
+                let url = '/api/events';
+                if (lastEventTimestamp) {
+                    url += '?since=' + encodeURIComponent(lastEventTimestamp);
+                }
+
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.events && data.events.length > 0) {
+                    // Process events in reverse order (oldest first)
+                    const newEvents = data.events
+                        .filter(e => !shownEventIds.has(e.id))
+                        .reverse();
+
+                    for (const event of newEvents) {
+                        shownEventIds.add(event.id);
+
+                        // Extract icon from message or use default
+                        let icon = '🔔';
+                        const firstChar = event.message.charAt(0);
+                        if (firstChar && firstChar.codePointAt(0) > 0x1F300) {
+                            icon = firstChar;
+                        }
+
+                        showToast(event.message, icon, 'security');
+
+                        // Update last timestamp
+                        if (!lastEventTimestamp || event.recorded_at > lastEventTimestamp) {
+                            lastEventTimestamp = event.recorded_at;
+                        }
+                    }
+                }
+
+                // Keep only last 100 event IDs in memory
+                if (shownEventIds.size > 100) {
+                    const idsArray = Array.from(shownEventIds);
+                    shownEventIds.clear();
+                    idsArray.slice(-100).forEach(id => shownEventIds.add(id));
+                }
+
+            } catch (error) {
+                console.error('Error polling security events:', error);
+            }
+        }
+
         // Load on page ready
         loadDashboard();
+
+        // Initial security events poll
+        pollSecurityEvents();
 
         // Auto-refresh every 30 seconds (data only, no page reload)
         setInterval(() => {
             console.log('Refreshing data...');
             loadDashboard();
         }, 30000);
+
+        // Poll security events every 5 seconds for real-time notifications
+        setInterval(pollSecurityEvents, 5000);
     </script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 </body>
