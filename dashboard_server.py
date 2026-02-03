@@ -144,7 +144,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _format_security_message(self, device_name, device_type, status):
         """Format security event message in Japanese."""
         if 'Lock' in device_type:
-            lock_state = status.get('lockState', '')
+            lock_state = status.get('lockState', '').lower()
             if lock_state == 'locked':
                 return '🔒 {} が施錠されました'.format(device_name)
             elif lock_state == 'unlocked':
@@ -152,10 +152,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif lock_state == 'jammed':
                 return '⚠️ {} がジャム状態です'.format(device_name)
         elif device_type == 'Contact Sensor':
-            open_state = status.get('openState', '')
+            open_state = status.get('openState', '').lower()
             if open_state == 'open':
                 return '🚪 {} が開きました'.format(device_name)
-            elif open_state == 'close':
+            elif open_state in ('close', 'closed'):
                 return '🚪 {} が閉まりました'.format(device_name)
         elif device_type == 'Motion Sensor':
             if status.get('moveDetected', False):
@@ -436,7 +436,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _get_security_display_status(self, device_type, status):
         """Get display-friendly status for security devices."""
         if 'Lock' in device_type:
-            lock_state = status.get('lockState', '')
+            lock_state = status.get('lockState', '').lower()  # Handle both LOCKED and locked
             if lock_state == 'locked':
                 return {'text': '施錠', 'icon': '🔒', 'color': 'green'}
             elif lock_state == 'unlocked':
@@ -446,10 +446,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return {'text': '不明', 'icon': '❓', 'color': 'gray'}
 
         elif device_type == 'Contact Sensor':
-            open_state = status.get('openState', '')
+            open_state = status.get('openState', '').lower()  # Handle both OPEN and open
             if open_state == 'open':
                 return {'text': '開', 'icon': '🚪', 'color': 'orange'}
-            elif open_state == 'close':
+            elif open_state in ('close', 'closed'):
                 return {'text': '閉', 'icon': '🚪', 'color': 'green'}
             return {'text': '不明', 'icon': '❓', 'color': 'gray'}
 
