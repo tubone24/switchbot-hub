@@ -1226,6 +1226,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 html += '<div class="chart-wrapper"><canvas id="chart-' + title.toLowerCase() + '-noise"></canvas></div></div>';
             }
 
+            // Add light level chart if any device has it
+            const hasLight = devices.some(d => d.latest && d.latest.light_level !== null && d.latest.light_level !== undefined);
+            if (hasLight) {
+                html += '<div class="chart-container"><h3>Light Level (照度)</h3>';
+                html += '<div class="chart-wrapper"><canvas id="chart-' + title.toLowerCase() + '-light"></canvas></div></div>';
+            }
+
             html += '</div>';
             return html;
         }
@@ -1257,6 +1264,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             html += '</div>';
             html += '<div class="chart-container"><h3>Wind Speed</h3>';
             html += '<div class="chart-wrapper"><canvas id="chart-wind"></canvas></div></div>';
+            html += '<div class="chart-container"><h3>Wind Direction (風向)</h3>';
+            html += '<div class="chart-wrapper"><canvas id="chart-wind-angle"></canvas></div></div>';
             html += '</div>';
             return html;
         }
@@ -1339,6 +1348,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     renderLineChart('chart-indoor-co2', indoorDevices, 'co2', colors);
                     renderLineChart('chart-indoor-pressure', indoorDevices, 'pressure', colors);
                     renderLineChart('chart-indoor-noise', indoorDevices, 'noise', colors);
+                    renderLineChart('chart-indoor-light', indoorDevices, 'light_level', colors);
+                }
+            }
+
+            // Outdoor light chart (if any outdoor device has light_level)
+            if (filters.outdoor) {
+                const outdoorDevices = [
+                    ...data.switchbot.outdoor
+                        .filter(d => isSensorVisible('switchbot', d.device_id))
+                        .map(d => ({...d, source: 'SB'})),
+                    ...data.netatmo.outdoor
+                        .filter(d => isSensorVisible('netatmo', d.device_id))
+                        .map(d => ({...d, source: 'NA'}))
+                ];
+                if (outdoorDevices.length > 0) {
+                    renderLineChart('chart-outdoor-light', outdoorDevices, 'light_level', colors);
                 }
             }
 
@@ -1347,6 +1372,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 const filteredWind = data.netatmo.wind.filter(d => isSensorVisible('netatmo', d.device_id));
                 if (filteredWind.length > 0) {
                     renderWindChart('chart-wind', filteredWind);
+                    renderWindAngleChart('chart-wind-angle', filteredWind);
                 }
             }
 
@@ -1485,6 +1511,85 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         y: {
                             beginAtZero: true,
                             title: { display: true, text: 'm/s' }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderWindAngleChart(canvasId, devices) {
+            if (!document.getElementById(canvasId)) return;
+
+            const device = devices[0];
+            if (!device || !device.history) return;
+
+            const angleData = device.history
+                .filter(h => h.wind_angle !== null && h.wind_angle !== undefined)
+                .map(h => ({
+                    x: new Date(h.recorded_at),
+                    y: h.wind_angle
+                }));
+
+            if (angleData.length === 0) return;
+
+            // Convert angle to direction label
+            function angleToDirection(angle) {
+                const directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                                    'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+                const index = Math.round(angle / 22.5) % 16;
+                return directions[index];
+            }
+
+            createChart(canvasId, {
+                type: 'line',
+                data: {
+                    datasets: [
+                        {
+                            label: 'Wind Direction (°)',
+                            data: angleData,
+                            borderColor: 'rgba(120, 144, 156, 1)',
+                            backgroundColor: 'rgba(120, 144, 156, 0.2)',
+                            borderWidth: 2,
+                            tension: 0,
+                            pointRadius: 2,
+                            fill: false
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'top' },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const angle = context.parsed.y;
+                                    const dir = angleToDirection(angle);
+                                    return angle + '° (' + dir + ')';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'hour',
+                                displayFormats: { hour: 'HH:mm' }
+                            }
+                        },
+                        y: {
+                            min: 0,
+                            max: 360,
+                            title: { display: true, text: '° (N=0, E=90, S=180, W=270)' },
+                            ticks: {
+                                stepSize: 45,
+                                callback: function(value) {
+                                    const labels = {0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW', 360: 'N'};
+                                    return labels[value] || value + '°';
+                                }
+                            }
                         }
                     }
                 }
