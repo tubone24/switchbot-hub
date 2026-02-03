@@ -40,7 +40,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         """Handle GET requests."""
         if self.path == '/':
             self._serve_dashboard()
-        elif self.path == '/api/data':
+        elif self.path.startswith('/api/data'):
             self._serve_api_data()
         elif self.path.startswith('/api/events'):
             self._serve_api_events()
