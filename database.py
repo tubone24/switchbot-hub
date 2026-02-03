@@ -62,7 +62,7 @@ class DeviceDatabase:
             ON device_history(device_id, recorded_at)
         ''')
 
-        # Time series table for sensor data (temperature, humidity, CO2)
+        # Time series table for sensor data (temperature, humidity, CO2, light_level)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS sensor_timeseries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,7 +72,8 @@ class DeviceDatabase:
                 temperature REAL,
                 humidity REAL,
                 co2 INTEGER,
-                battery INTEGER
+                battery INTEGER,
+                light_level INTEGER
             )
         ''')
 
@@ -117,6 +118,9 @@ class DeviceDatabase:
         # Migration: Add wind/rain columns to netatmo_timeseries if they don't exist
         self._migrate_netatmo_columns(cursor)
 
+        # Migration: Add light_level column to sensor_timeseries if it doesn't exist
+        self._migrate_sensor_columns(cursor)
+
         conn.commit()
         conn.close()
 
@@ -142,6 +146,26 @@ class DeviceDatabase:
                 try:
                     cursor.execute(
                         'ALTER TABLE netatmo_timeseries ADD COLUMN {} {}'.format(col_name, col_type)
+                    )
+                except Exception:
+                    pass  # Column might already exist
+
+    def _migrate_sensor_columns(self, cursor):
+        """Add light_level column to sensor_timeseries if it doesn't exist."""
+        # Check existing columns
+        cursor.execute("PRAGMA table_info(sensor_timeseries)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        # New columns to add
+        new_columns = [
+            ('light_level', 'INTEGER'),
+        ]
+
+        for col_name, col_type in new_columns:
+            if col_name not in existing_columns:
+                try:
+                    cursor.execute(
+                        'ALTER TABLE sensor_timeseries ADD COLUMN {} {}'.format(col_name, col_type)
                     )
                 except Exception:
                     pass  # Column might already exist
@@ -349,7 +373,7 @@ class DeviceDatabase:
 
     def save_sensor_data(self, device_id, device_name, status):
         """
-        Save sensor time series data (temperature, humidity, CO2).
+        Save sensor time series data (temperature, humidity, CO2, light_level).
 
         Args:
             device_id: Device ID
@@ -365,8 +389,22 @@ class DeviceDatabase:
         co2 = status.get('CO2')
         battery = status.get('battery')
 
+        # Extract light level (supports both lightLevel and brightness)
+        # Hub 2: lightLevel (numeric, 0-20)
+        # Contact/Motion Sensor: brightness ("dim" or "bright")
+        light_level = status.get('lightLevel')
+        if light_level is None:
+            brightness = status.get('brightness')
+            if brightness is not None:
+                # Convert brightness string to numeric value
+                # dim -> 1, bright -> 2
+                if brightness.lower() == 'dim':
+                    light_level = 1
+                elif brightness.lower() == 'bright':
+                    light_level = 2
+
         # Only save if there's sensor data
-        if temperature is None and humidity is None and co2 is None:
+        if temperature is None and humidity is None and co2 is None and light_level is None:
             return False
 
         now = datetime.now().isoformat()
@@ -376,9 +414,9 @@ class DeviceDatabase:
 
         cursor.execute('''
             INSERT INTO sensor_timeseries
-            (device_id, device_name, recorded_at, temperature, humidity, co2, battery)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (device_id, device_name, now, temperature, humidity, co2, battery))
+            (device_id, device_name, recorded_at, temperature, humidity, co2, battery, light_level)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (device_id, device_name, now, temperature, humidity, co2, battery, light_level))
 
         conn.commit()
         conn.close()
@@ -412,8 +450,9 @@ class DeviceDatabase:
         rows = cursor.fetchall()
         conn.close()
 
-        return [
-            {
+        result = []
+        for row in rows:
+            item = {
                 'device_id': row['device_id'],
                 'device_name': row['device_name'],
                 'recorded_at': row['recorded_at'],
@@ -422,8 +461,13 @@ class DeviceDatabase:
                 'co2': row['co2'],
                 'battery': row['battery']
             }
-            for row in rows
-        ]
+            # Add light_level if it exists in the schema
+            try:
+                item['light_level'] = row['light_level']
+            except (IndexError, KeyError):
+                item['light_level'] = None
+            result.append(item)
+        return result
 
     def get_sensor_data_last_24h(self, device_id):
         """
@@ -451,8 +495,9 @@ class DeviceDatabase:
         rows = cursor.fetchall()
         conn.close()
 
-        return [
-            {
+        result = []
+        for row in rows:
+            item = {
                 'device_id': row['device_id'],
                 'device_name': row['device_name'],
                 'recorded_at': row['recorded_at'],
@@ -461,8 +506,13 @@ class DeviceDatabase:
                 'co2': row['co2'],
                 'battery': row['battery']
             }
-            for row in rows
-        ]
+            # Add light_level if it exists in the schema
+            try:
+                item['light_level'] = row['light_level']
+            except (IndexError, KeyError):
+                item['light_level'] = None
+            result.append(item)
+        return result
 
     def get_sensor_data_range(self, device_id, start_date, end_date):
         """
@@ -490,8 +540,9 @@ class DeviceDatabase:
         rows = cursor.fetchall()
         conn.close()
 
-        return [
-            {
+        result = []
+        for row in rows:
+            item = {
                 'device_id': row['device_id'],
                 'device_name': row['device_name'],
                 'recorded_at': row['recorded_at'],
@@ -500,8 +551,13 @@ class DeviceDatabase:
                 'co2': row['co2'],
                 'battery': row['battery']
             }
-            for row in rows
-        ]
+            # Add light_level if it exists in the schema
+            try:
+                item['light_level'] = row['light_level']
+            except (IndexError, KeyError):
+                item['light_level'] = None
+            result.append(item)
+        return result
 
     def get_all_sensor_devices(self):
         """

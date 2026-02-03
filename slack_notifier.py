@@ -339,6 +339,12 @@ class SlackNotifier:
             summaries.append("{}%".format(status['humidity']))
         if 'CO2' in status:
             summaries.append("{}ppm".format(status['CO2']))
+        # Light level (Hub 2: lightLevel as number, Contact/Motion Sensor: brightness as dim/bright)
+        if 'lightLevel' in status:
+            summaries.append("照度:{}".format(status['lightLevel']))
+        elif 'brightness' in status:
+            brightness_ja = '明るい' if status['brightness'].lower() == 'bright' else '暗い'
+            summaries.append("照度:{}".format(brightness_ja))
 
         status_text = " / ".join(summaries) if summaries else "No data"
         text = "[{}] {}".format(device_name, status_text)
@@ -507,11 +513,12 @@ class SlackNotifier:
             gust_strength = device.get('gust_strength', {}).get('latest', '-') if is_wind_module else '-'
             rain = device.get('rain', {}).get('latest', '-') if is_rain_module else '-'
             rain_24h = device.get('rain_24h', {}).get('latest', '-') if is_rain_module else '-'
+            light_level = device.get('light_level', {}).get('latest', '-')
 
             has_data = any([
                 temp != '-', humidity != '-', co2 != '-',
                 pressure != '-', noise != '-',
-                wind_strength != '-', rain != '-'
+                wind_strength != '-', rain != '-', light_level != '-'
             ])
 
             if has_data:
@@ -545,6 +552,9 @@ class SlackNotifier:
                     parts.append("{}mm/24h".format(rain_24h))
                 elif rain != '-':
                     parts.append("{}mm".format(rain))
+                # Light level data (SwitchBot Hub 2, Contact/Motion Sensor)
+                if light_level != '-':
+                    parts.append("照度:{}".format(light_level))
 
                 line = "*{}*: {}".format(name, " / ".join(parts))
 
@@ -594,6 +604,7 @@ class SlackNotifier:
             'wind': '🌬️ 風速・突風',
             'wind_direction': '🧭 風向',
             'rain': '🌧️ 雨量',
+            'light_level': '💡 照度',
             # Legacy keys
             'temp_humidity': '温度',
         }
@@ -604,7 +615,8 @@ class SlackNotifier:
             'indoor_temp', 'indoor_humidity', 'co2',
             'pressure', 'noise',
             'wind', 'wind_direction',
-            'rain'
+            'rain',
+            'light_level'
         ]
 
         if chart_urls:

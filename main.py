@@ -24,6 +24,7 @@ from webhook_server import WebhookServer, parse_webhook_event
 from cloudflare_tunnel import CloudflareTunnel
 from chart_generator import ChartGenerator
 from garbage_notifier import GarbageNotifier
+from dashboard_server import DashboardServer
 
 # Optional: Local chart generator for Raspberry Pi (requires matplotlib)
 try:
@@ -273,6 +274,24 @@ class SwitchBotMonitor:
             'evening': None,  # date of last evening notification
         }
 
+        # Dashboard server
+        self.dashboard_server = None
+
+    def setup_dashboard_server(self):
+        """Setup dashboard HTTP server."""
+        dashboard_config = self.config.get('dashboard', {})
+        if not dashboard_config.get('enabled', False):
+            logging.info("Dashboard server disabled")
+            return False
+
+        port = dashboard_config.get('port', 7777)
+
+        self.dashboard_server = DashboardServer(port=port, db=self.db)
+        self.dashboard_server.start()
+
+        logging.info("Dashboard available at http://localhost:%d", port)
+        return True
+
     def setup_webhook_server(self):
         """Setup webhook server and Cloudflare tunnel."""
         webhook_config = self.config.get('webhook', {})
@@ -458,6 +477,10 @@ class SwitchBotMonitor:
 
             try:
                 status = self.api.get_device_status(device_id)
+
+                # Debug: dump full status for Hub 2 to check if lightLevel exists
+                if 'Hub' in device_type:
+                    logging.debug("Full status for %s (%s): %s", device_name, device_type, status)
 
                 # Get previous state
                 previous = self.db.get_device_state(device_id)
@@ -972,6 +995,8 @@ class SwitchBotMonitor:
         rain_data = {}     # {device_name: sensor_data_list} for rain sensors
         pressure_data = {} # {device_name: sensor_data_list} for pressure (indoor only)
         noise_data = {}    # {device_name: sensor_data_list} for noise (indoor only)
+        # SwitchBot light level data (Hub 2, Contact Sensor, Motion Sensor)
+        light_level_data = {}  # {device_name: sensor_data_list} for light level sensors
         devices_summary = []
 
         # Process SwitchBot sensors
@@ -993,6 +1018,14 @@ class SwitchBotMonitor:
                 else:
                     indoor_data["[SB] " + device_name] = sensor_data
 
+                # Collect devices with light_level data
+                has_light_level = any(
+                    reading.get('light_level') is not None
+                    for reading in sensor_data
+                )
+                if has_light_level:
+                    light_level_data["[SB] " + device_name] = sensor_data
+
                 # Get latest values for summary
                 latest = sensor_data[-1] if sensor_data else {}
                 is_outdoor = self._is_outdoor_sensor(device_name)
@@ -1007,6 +1040,7 @@ class SwitchBotMonitor:
                     'noise': {'latest': '-'},
                     'wind_strength': {'latest': '-'},
                     'rain_24h': {'latest': '-'},
+                    'light_level': {'latest': latest.get('light_level', '-')},
                     'is_outdoor': is_outdoor
                 })
 
@@ -1084,7 +1118,7 @@ class SwitchBotMonitor:
         if self.use_local_chart and self.local_chart_generator and self.slack_uploader:
             self._send_local_chart_report(
                 outdoor_data, indoor_data, wind_data, rain_data,
-                pressure_data, noise_data, date_str, interval_seconds
+                pressure_data, noise_data, light_level_data, date_str, interval_seconds
             )
             return
 
@@ -1156,6 +1190,14 @@ class SwitchBotMonitor:
                 )
                 logging.debug("Generated rain chart")
 
+            # Light level chart (SwitchBot Hub 2, Contact Sensor, Motion Sensor)
+            if light_level_data:
+                chart_urls['light_level'] = self.chart_generator.generate_multi_device_chart(
+                    light_level_data, 'light_level', date_str, use_short_url=True,
+                    interval_seconds=interval_seconds
+                )
+                logging.debug("Generated light level chart")
+
         except Exception as e:
             logging.error("Error generating chart: %s", e)
 
@@ -1167,7 +1209,7 @@ class SwitchBotMonitor:
             logging.error("Error sending graph report: %s", e)
 
     def _send_local_chart_report(self, outdoor_data, indoor_data, wind_data, rain_data,
-                                  pressure_data, noise_data, date_str, interval_seconds,
+                                  pressure_data, noise_data, light_level_data, date_str, interval_seconds,
                                   devices_summary=None):
         """
         Generate charts locally using matplotlib and upload to Slack.
@@ -1245,6 +1287,13 @@ class SwitchBotMonitor:
                     chart_paths['rain' + suffix] = self.local_chart_generator.generate_rain_chart(
                         rain_data, date_str,
                         interval_seconds=interval, hours_range=hours
+                    )
+
+                # Light level chart
+                if light_level_data:
+                    chart_paths['light_level' + suffix] = self.local_chart_generator.generate_multi_device_chart(
+                        light_level_data, 'light_level', date_str,
+                        interval_seconds=interval, hours_range=hours, chart_type='light_level'
                     )
 
                 logging.debug("Generated local %dh charts", hours)
@@ -1421,6 +1470,9 @@ class SwitchBotMonitor:
             len(self.device_map), counts['polling'], counts['webhook'], counts['ignore']
         )
 
+        # Setup dashboard server
+        self.setup_dashboard_server()
+
         # Setup webhook server
         webhook_enabled = self.setup_webhook_server()
 
@@ -1528,6 +1580,10 @@ class SwitchBotMonitor:
         # Stop Pub/Sub client
         if self.nest_pubsub:
             self.nest_pubsub.stop()
+
+        # Stop dashboard server
+        if self.dashboard_server:
+            self.dashboard_server.stop()
 
         # Stop webhook server
         if self.webhook_server:
