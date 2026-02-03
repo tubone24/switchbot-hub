@@ -469,18 +469,19 @@ class DeviceDatabase:
             result.append(item)
         return result
 
-    def get_sensor_data_last_24h(self, device_id):
+    def get_sensor_data_last_hours(self, device_id, hours=24):
         """
-        Get sensor data for the last 24 hours.
+        Get sensor data for the specified number of hours.
 
         Args:
             device_id: Device ID
+            hours: Number of hours to retrieve (default: 24)
 
         Returns:
-            list: List of sensor readings for the last 24 hours
+            list: List of sensor readings for the specified period
         """
         now = datetime.now()
-        start_time = now - timedelta(hours=24)
+        start_time = now - timedelta(hours=hours)
 
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -513,6 +514,19 @@ class DeviceDatabase:
                 item['light_level'] = None
             result.append(item)
         return result
+
+    def get_sensor_data_last_24h(self, device_id):
+        """
+        Get sensor data for the last 24 hours.
+        (Backward compatibility wrapper)
+
+        Args:
+            device_id: Device ID
+
+        Returns:
+            list: List of sensor readings for the last 24 hours
+        """
+        return self.get_sensor_data_last_hours(device_id, hours=24)
 
     def get_sensor_data_range(self, device_id, start_date, end_date):
         """
@@ -795,18 +809,19 @@ class DeviceDatabase:
 
         return result
 
-    def get_netatmo_data_last_24h(self, device_id):
+    def get_netatmo_data_last_hours(self, device_id, hours=24):
         """
-        Get Netatmo sensor data for the last 24 hours.
+        Get Netatmo sensor data for the specified number of hours.
 
         Args:
             device_id: Device ID
+            hours: Number of hours to retrieve (default: 24)
 
         Returns:
-            list: List of sensor readings for the last 24 hours
+            list: List of sensor readings for the specified period
         """
         now = datetime.now()
-        start_time = now - timedelta(hours=24)
+        start_time = now - timedelta(hours=hours)
 
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -858,6 +873,19 @@ class DeviceDatabase:
             result.append(item)
 
         return result
+
+    def get_netatmo_data_last_24h(self, device_id):
+        """
+        Get Netatmo sensor data for the last 24 hours.
+        (Backward compatibility wrapper)
+
+        Args:
+            device_id: Device ID
+
+        Returns:
+            list: List of sensor readings for the last 24 hours
+        """
+        return self.get_netatmo_data_last_hours(device_id, hours=24)
 
     def get_all_netatmo_devices(self):
         """

@@ -67,7 +67,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
 
-        data = self._get_sensor_data()
+        # Parse hours parameter from query string (default: 24)
+        hours = 24
+        if '?' in self.path:
+            query = self.path.split('?')[1]
+            for param in query.split('&'):
+                if param.startswith('hours='):
+                    try:
+                        hours = int(param.split('=')[1])
+                        # Limit to valid range: 1-168 (7 days)
+                        hours = max(1, min(168, hours))
+                    except ValueError:
+                        hours = 24
+
+        data = self._get_sensor_data(hours=hours)
         response = json.dumps(data, ensure_ascii=False, indent=2)
         self.wfile.write(response.encode('utf-8'))
 
@@ -165,8 +178,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         return '{} の状態が変化しました'.format(device_name)
 
-    def _get_sensor_data(self):
-        """Get sensor data from database."""
+    def _get_sensor_data(self, hours=24):
+        """Get sensor data from database.
+
+        Args:
+            hours: Number of hours of history to retrieve (default: 24)
+        """
         if self.db is None:
             return {'error': 'Database not available'}
 
@@ -303,8 +320,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 device_id = device['device_id']
                 device_name = device['device_name']
 
-                # Get last 24 hours data
-                history = self.db.get_sensor_data_last_24h(device_id)
+                # Get history data for the specified period
+                history = self.db.get_sensor_data_last_hours(device_id, hours=hours)
                 if not history:
                     continue
 
@@ -359,8 +376,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 module_type = device.get('module_type', '')
                 is_outdoor = device.get('is_outdoor', False)
 
-                # Get last 24 hours data
-                history = self.db.get_netatmo_data_last_24h(device_id)
+                # Get history data for the specified period
+                history = self.db.get_netatmo_data_last_hours(device_id, hours=hours)
                 if not history:
                     continue
 
@@ -717,6 +734,38 @@ class DashboardHandler(BaseHTTPRequestHandler):
             padding: 6px 12px;
             border-bottom: 1px solid #333;
         }
+        /* Time range selector */
+        .time-range-selector {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+            padding: 4px 12px;
+            background: #1a1a2e;
+            border-radius: 20px;
+        }
+        .time-range-selector label {
+            color: #888;
+            font-size: 0.85em;
+            padding: 0;
+            background: transparent;
+        }
+        .time-range-selector select {
+            background: #16213e;
+            color: #e0e0e0;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 6px 10px;
+            font-size: 0.9em;
+            cursor: pointer;
+        }
+        .time-range-selector select:hover {
+            border-color: #4fc3f7;
+        }
+        .time-range-selector select:focus {
+            outline: none;
+            border-color: #4fc3f7;
+        }
         /* Toast notifications */
         .toast-container {
             position: fixed;
@@ -856,6 +905,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             </button>
             <div class="filter-dropdown-content" id="dropdown-content-netatmo"></div>
         </div>
+
+        <!-- Time range selector -->
+        <div class="time-range-selector">
+            <label for="time-range">Period:</label>
+            <select id="time-range" onchange="onTimeRangeChange()">
+                <option value="12">12h</option>
+                <option value="24" selected>24h</option>
+                <option value="72">3d</option>
+                <option value="168">7d</option>
+            </select>
+        </div>
     </div>
 
     <div id="content">
@@ -885,6 +945,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
             switchbot: null,
             netatmo: null
         };
+
+        // Selected time range in hours
+        let selectedHours = 24;
+
+        // Get time axis configuration based on selected period
+        function getTimeAxisConfig() {
+            if (selectedHours <= 24) {
+                return { unit: 'hour', displayFormats: { hour: 'HH:mm' } };
+            } else if (selectedHours <= 72) {
+                return { unit: 'hour', displayFormats: { hour: 'M/d HH:mm' } };
+            } else {
+                return { unit: 'day', displayFormats: { day: 'M/d' } };
+            }
+        }
+
+        // Handle time range change
+        function onTimeRangeChange() {
+            selectedHours = parseInt(document.getElementById('time-range').value);
+            loadDashboard();
+        }
 
         // Initialize filter checkboxes
         document.querySelectorAll('.filter-bar input[id^="filter-"]').forEach(checkbox => {
@@ -1023,7 +1103,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         async function loadDashboard() {
             try {
-                const response = await fetch('/api/data');
+                const response = await fetch('/api/data?hours=' + selectedHours);
                 const data = await response.json();
                 currentData = data;
 
@@ -1435,10 +1515,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     scales: {
                         x: {
                             type: 'time',
-                            time: {
-                                unit: 'hour',
-                                displayFormats: { hour: 'HH:mm' }
-                            }
+                            time: getTimeAxisConfig()
                         },
                         y: {
                             beginAtZero: false
@@ -1503,10 +1580,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     scales: {
                         x: {
                             type: 'time',
-                            time: {
-                                unit: 'hour',
-                                displayFormats: { hour: 'HH:mm' }
-                            }
+                            time: getTimeAxisConfig()
                         },
                         y: {
                             beginAtZero: true,
@@ -1574,10 +1648,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     scales: {
                         x: {
                             type: 'time',
-                            time: {
-                                unit: 'hour',
-                                displayFormats: { hour: 'HH:mm' }
-                            }
+                            time: getTimeAxisConfig()
                         },
                         y: {
                             min: 0,
@@ -1653,10 +1724,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     scales: {
                         x: {
                             type: 'time',
-                            time: {
-                                unit: 'hour',
-                                displayFormats: { hour: 'HH:mm' }
-                            }
+                            time: getTimeAxisConfig()
                         },
                         y: {
                             type: 'linear',
