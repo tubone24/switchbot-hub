@@ -187,11 +187,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             }
         }
 
-        # Get security device states
+        # Get security device states (from device_states + latest from device_history)
         try:
             conn = self.db._get_connection()
             cursor = conn.cursor()
 
+            # First, get all security devices from device_states
             cursor.execute('''
                 SELECT device_id, device_name, device_type, status_json, updated_at
                 FROM device_states
@@ -199,23 +200,64 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 ORDER BY device_name
             ''', self.SECURITY_DEVICE_TYPES)
 
-            rows = cursor.fetchall()
+            device_states_rows = cursor.fetchall()
+
+            # Also get the latest event for each security device from history
+            cursor.execute('''
+                SELECT device_id, device_name, device_type, status_json, recorded_at,
+                       ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY recorded_at DESC) as rn
+                FROM device_history
+                WHERE device_type IN (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', self.SECURITY_DEVICE_TYPES)
+
+            history_rows = cursor.fetchall()
             conn.close()
 
-            for row in rows:
+            # Build a map of latest history per device
+            latest_history = {}
+            for row in history_rows:
+                if row['rn'] == 1:  # Latest entry
+                    latest_history[row['device_id']] = {
+                        'status_json': row['status_json'],
+                        'recorded_at': row['recorded_at']
+                    }
+
+            for row in device_states_rows:
                 status = json.loads(row['status_json']) if row['status_json'] else {}
+                updated_at = row['updated_at']
+
+                # Check if history has more recent data
+                device_id = row['device_id']
+                if device_id in latest_history:
+                    hist = latest_history[device_id]
+                    hist_status = json.loads(hist['status_json']) if hist['status_json'] else {}
+                    # Merge history status into current status (history takes precedence for state fields)
+                    for key in ['lockState', 'openState', 'moveDetected']:
+                        if key in hist_status:
+                            status[key] = hist_status[key]
+                    # Use more recent timestamp
+                    if hist['recorded_at'] and (not updated_at or hist['recorded_at'] > updated_at):
+                        updated_at = hist['recorded_at']
+
                 device_data = {
                     'device_id': row['device_id'],
                     'device_name': row['device_name'],
                     'device_type': row['device_type'],
                     'status': status,
-                    'updated_at': row['updated_at'],
+                    'updated_at': updated_at,
                     'display_status': self._get_security_display_status(row['device_type'], status)
                 }
                 result['security'].append(device_data)
 
         except Exception as e:
             logging.error("Error getting security devices: %s", e)
+
+        # Build sensor list for filtering (will be populated below)
+        result['sensor_list'] = {
+            'security': [{'id': d['device_id'], 'name': d['device_name']} for d in result['security']],
+            'switchbot': [],
+            'netatmo': []
+        }
 
         last_updated = None
 
@@ -244,6 +286,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         pass
 
                 device_data = {
+                    'device_id': device_id,
                     'device_name': device_name,
                     'latest': {
                         'temperature': latest.get('temperature'),
@@ -255,8 +298,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     'history': history
                 }
 
+                # Add to sensor list for filtering
+                is_outdoor = self._is_outdoor_sensor(device_name)
+                result['sensor_list']['switchbot'].append({
+                    'id': device_id,
+                    'name': device_name,
+                    'category': 'outdoor' if is_outdoor else 'indoor'
+                })
+
                 # Classify as outdoor or indoor
-                if self._is_outdoor_sensor(device_name):
+                if is_outdoor:
                     result['switchbot']['outdoor'].append(device_data)
                 else:
                     result['switchbot']['indoor'].append(device_data)
@@ -291,6 +342,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         pass
 
                 device_data = {
+                    'device_id': device_id,
                     'device_name': device_name,
                     'module_type': module_type,
                     'latest': {
@@ -309,6 +361,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     },
                     'history': history
                 }
+
+                # Determine category for sensor list
+                if module_type == 'NAModule2':
+                    category = 'wind'
+                elif module_type == 'NAModule3':
+                    category = 'rain'
+                elif is_outdoor:
+                    category = 'outdoor'
+                else:
+                    category = 'indoor'
+
+                # Add to sensor list for filtering
+                result['sensor_list']['netatmo'].append({
+                    'id': device_id,
+                    'name': device_name,
+                    'category': category
+                })
 
                 # Classify by module type
                 if module_type == 'NAModule2':
@@ -535,6 +604,84 @@ class DashboardHandler(BaseHTTPRequestHandler):
             width: 16px;
             height: 16px;
         }
+        /* Multi-select dropdown */
+        .filter-dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        .filter-dropdown-btn {
+            background: #1a1a2e;
+            border: 1px solid #333;
+            color: #eee;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 150px;
+            justify-content: space-between;
+        }
+        .filter-dropdown-btn:hover {
+            background: #2a2a4e;
+        }
+        .filter-dropdown-btn .count {
+            background: #4fc3f7;
+            color: #1a1a2e;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+        .filter-dropdown-content {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: #16213e;
+            min-width: 220px;
+            max-height: 300px;
+            overflow-y: auto;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.4);
+            z-index: 100;
+            border-radius: 8px;
+            margin-top: 4px;
+            border: 1px solid #333;
+        }
+        .filter-dropdown-content.show {
+            display: block;
+        }
+        .filter-dropdown-content label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px;
+            cursor: pointer;
+            font-size: 0.85em;
+            border-bottom: 1px solid #333;
+            background: transparent;
+            border-radius: 0;
+        }
+        .filter-dropdown-content label:last-child {
+            border-bottom: none;
+        }
+        .filter-dropdown-content label:hover {
+            background: #1a1a2e;
+        }
+        .filter-dropdown-content .select-all {
+            background: #1a1a2e;
+            font-weight: bold;
+            border-bottom: 2px solid #333;
+        }
+        .filter-dropdown-content .category-header {
+            background: #0f1524;
+            color: #4fc3f7;
+            font-size: 0.75em;
+            text-transform: uppercase;
+            padding: 6px 12px;
+            border-bottom: 1px solid #333;
+        }
         /* Toast notifications */
         .toast-container {
             position: fixed;
@@ -648,11 +795,32 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     <!-- Filter bar -->
     <div class="filter-bar" id="filterBar">
+        <!-- Section filters -->
         <label><input type="checkbox" id="filter-security" checked> 🔐 Security</label>
         <label><input type="checkbox" id="filter-outdoor" checked> 🌳 Outdoor</label>
         <label><input type="checkbox" id="filter-indoor" checked> 🏠 Indoor</label>
         <label><input type="checkbox" id="filter-wind" checked> 🌬️ Wind</label>
         <label><input type="checkbox" id="filter-rain" checked> 🌧️ Rain</label>
+
+        <!-- Sensor dropdowns (populated dynamically) -->
+        <div class="filter-dropdown" id="dropdown-security" style="display:none;">
+            <button class="filter-dropdown-btn" onclick="toggleDropdown('security')">
+                🔐 Sensors <span class="count" id="count-security">0</span> ▼
+            </button>
+            <div class="filter-dropdown-content" id="dropdown-content-security"></div>
+        </div>
+        <div class="filter-dropdown" id="dropdown-switchbot" style="display:none;">
+            <button class="filter-dropdown-btn" onclick="toggleDropdown('switchbot')">
+                SwitchBot <span class="count" id="count-switchbot">0</span> ▼
+            </button>
+            <div class="filter-dropdown-content" id="dropdown-content-switchbot"></div>
+        </div>
+        <div class="filter-dropdown" id="dropdown-netatmo" style="display:none;">
+            <button class="filter-dropdown-btn" onclick="toggleDropdown('netatmo')">
+                Netatmo <span class="count" id="count-netatmo">0</span> ▼
+            </button>
+            <div class="filter-dropdown-content" id="dropdown-content-netatmo"></div>
+        </div>
     </div>
 
     <div id="content">
@@ -676,8 +844,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             rain: true
         };
 
+        // Sensor-level filters (device IDs to show; null = show all)
+        const sensorFilters = {
+            security: null,  // null means show all
+            switchbot: null,
+            netatmo: null
+        };
+
         // Initialize filter checkboxes
-        document.querySelectorAll('.filter-bar input').forEach(checkbox => {
+        document.querySelectorAll('.filter-bar input[id^="filter-"]').forEach(checkbox => {
             const key = checkbox.id.replace('filter-', '');
             checkbox.addEventListener('change', () => {
                 filters[key] = checkbox.checked;
@@ -685,12 +860,146 @@ class DashboardHandler(BaseHTTPRequestHandler):
             });
         });
 
+        // Toggle dropdown visibility
+        function toggleDropdown(type) {
+            const content = document.getElementById('dropdown-content-' + type);
+            const allContents = document.querySelectorAll('.filter-dropdown-content');
+            allContents.forEach(c => {
+                if (c !== content) c.classList.remove('show');
+            });
+            content.classList.toggle('show');
+        }
+
+        // Close dropdowns when clicking outside
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.filter-dropdown')) {
+                document.querySelectorAll('.filter-dropdown-content').forEach(c => {
+                    c.classList.remove('show');
+                });
+            }
+        });
+
+        // Build sensor dropdown for a category
+        function buildSensorDropdown(type, sensors) {
+            const container = document.getElementById('dropdown-content-' + type);
+            const dropdown = document.getElementById('dropdown-' + type);
+            const countEl = document.getElementById('count-' + type);
+
+            if (!sensors || sensors.length === 0) {
+                dropdown.style.display = 'none';
+                return;
+            }
+
+            dropdown.style.display = 'inline-block';
+
+            // Group by category if available
+            const byCategory = {};
+            sensors.forEach(s => {
+                const cat = s.category || 'other';
+                if (!byCategory[cat]) byCategory[cat] = [];
+                byCategory[cat].push(s);
+            });
+
+            let html = '';
+            // Select All option
+            html += '<label class="select-all">';
+            html += '<input type="checkbox" id="sensor-all-' + type + '" checked onchange="toggleAllSensors(\\'' + type + '\\', this.checked)"> ';
+            html += 'すべて選択</label>';
+
+            // Sensors grouped by category
+            const categoryNames = {
+                outdoor: '🌳 屋外',
+                indoor: '🏠 室内',
+                wind: '🌬️ 風速',
+                rain: '🌧️ 雨量',
+                other: '📱 その他'
+            };
+
+            for (const cat of Object.keys(byCategory).sort()) {
+                if (Object.keys(byCategory).length > 1) {
+                    html += '<div class="category-header">' + (categoryNames[cat] || cat) + '</div>';
+                }
+                for (const sensor of byCategory[cat]) {
+                    const escapedId = sensor.id.replace(/'/g, "\\\\'");
+                    html += '<label>';
+                    html += '<input type="checkbox" data-sensor-type="' + type + '" data-sensor-id="' + sensor.id + '" checked ';
+                    html += 'onchange="updateSensorFilter(\\'' + type + '\\')"> ';
+                    html += sensor.name + '</label>';
+                }
+            }
+
+            container.innerHTML = html;
+            updateSensorCount(type);
+        }
+
+        // Toggle all sensors in a category
+        function toggleAllSensors(type, checked) {
+            const checkboxes = document.querySelectorAll('input[data-sensor-type="' + type + '"]');
+            checkboxes.forEach(cb => cb.checked = checked);
+            updateSensorFilter(type);
+        }
+
+        // Update sensor filter state
+        function updateSensorFilter(type) {
+            const checkboxes = document.querySelectorAll('input[data-sensor-type="' + type + '"]');
+            const allCheckbox = document.getElementById('sensor-all-' + type);
+            const selectedIds = [];
+            let allChecked = true;
+
+            checkboxes.forEach(cb => {
+                if (cb.checked) {
+                    selectedIds.push(cb.dataset.sensorId);
+                } else {
+                    allChecked = false;
+                }
+            });
+
+            if (allCheckbox) {
+                allCheckbox.checked = allChecked;
+            }
+
+            // If all selected, use null (show all); otherwise use selectedIds
+            sensorFilters[type] = allChecked ? null : selectedIds;
+
+            updateSensorCount(type);
+
+            if (currentData) renderDashboard(currentData);
+        }
+
+        // Update the count badge
+        function updateSensorCount(type) {
+            const checkboxes = document.querySelectorAll('input[data-sensor-type="' + type + '"]');
+            const countEl = document.getElementById('count-' + type);
+            let count = 0;
+            checkboxes.forEach(cb => { if (cb.checked) count++; });
+            if (countEl) {
+                countEl.textContent = count + '/' + checkboxes.length;
+            }
+        }
+
+        // Check if a sensor should be shown
+        function isSensorVisible(type, deviceId) {
+            if (sensorFilters[type] === null) return true;
+            return sensorFilters[type].includes(deviceId);
+        }
+
         // Fetch data and render dashboard
+        let dropdownsInitialized = false;
+
         async function loadDashboard() {
             try {
                 const response = await fetch('/api/data');
                 const data = await response.json();
                 currentData = data;
+
+                // Build sensor dropdowns (only once)
+                if (!dropdownsInitialized && data.sensor_list) {
+                    buildSensorDropdown('security', data.sensor_list.security);
+                    buildSensorDropdown('switchbot', data.sensor_list.switchbot);
+                    buildSensorDropdown('netatmo', data.sensor_list.netatmo);
+                    dropdownsInitialized = true;
+                }
+
                 renderDashboard(data);
             } catch (error) {
                 document.getElementById('content').innerHTML =
@@ -739,41 +1048,58 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             let html = '';
 
-            // Security section
+            // Security section (apply sensor filter)
             if (filters.security && data.security && data.security.length > 0) {
-                html += renderSecuritySection(data.security);
+                const filteredSecurity = data.security.filter(d => isSensorVisible('security', d.device_id));
+                if (filteredSecurity.length > 0) {
+                    html += renderSecuritySection(filteredSecurity);
+                }
             }
 
-            // Outdoor section
+            // Outdoor section (apply sensor filters)
             if (filters.outdoor) {
                 const outdoorDevices = [
-                    ...data.switchbot.outdoor.map(d => ({...d, source: 'SB'})),
-                    ...data.netatmo.outdoor.map(d => ({...d, source: 'NA'}))
+                    ...data.switchbot.outdoor
+                        .filter(d => isSensorVisible('switchbot', d.device_id))
+                        .map(d => ({...d, source: 'SB'})),
+                    ...data.netatmo.outdoor
+                        .filter(d => isSensorVisible('netatmo', d.device_id))
+                        .map(d => ({...d, source: 'NA'}))
                 ];
                 if (outdoorDevices.length > 0) {
                     html += renderSection('Outdoor', outdoorDevices, ['temperature', 'humidity']);
                 }
             }
 
-            // Indoor section
+            // Indoor section (apply sensor filters)
             if (filters.indoor) {
                 const indoorDevices = [
-                    ...data.switchbot.indoor.map(d => ({...d, source: 'SB'})),
-                    ...data.netatmo.indoor.map(d => ({...d, source: 'NA'}))
+                    ...data.switchbot.indoor
+                        .filter(d => isSensorVisible('switchbot', d.device_id))
+                        .map(d => ({...d, source: 'SB'})),
+                    ...data.netatmo.indoor
+                        .filter(d => isSensorVisible('netatmo', d.device_id))
+                        .map(d => ({...d, source: 'NA'}))
                 ];
                 if (indoorDevices.length > 0) {
                     html += renderSection('Indoor', indoorDevices, ['temperature', 'humidity', 'co2', 'pressure', 'noise']);
                 }
             }
 
-            // Wind section
+            // Wind section (apply sensor filter)
             if (filters.wind && data.netatmo.wind.length > 0) {
-                html += renderWindSection(data.netatmo.wind);
+                const filteredWind = data.netatmo.wind.filter(d => isSensorVisible('netatmo', d.device_id));
+                if (filteredWind.length > 0) {
+                    html += renderWindSection(filteredWind);
+                }
             }
 
-            // Rain section
+            // Rain section (apply sensor filter)
             if (filters.rain && data.netatmo.rain.length > 0) {
-                html += renderRainSection(data.netatmo.rain);
+                const filteredRain = data.netatmo.rain.filter(d => isSensorVisible('netatmo', d.device_id));
+                if (filteredRain.length > 0) {
+                    html += renderRainSection(filteredRain);
+                }
             }
 
             document.getElementById('content').innerHTML = html;
@@ -946,11 +1272,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 'rgba(236, 64, 122, 1)',   // pink
             ];
 
-            // Outdoor charts (if filter enabled)
+            // Outdoor charts (if filter enabled, apply sensor filter)
             if (filters.outdoor) {
                 const outdoorDevices = [
-                    ...data.switchbot.outdoor.map(d => ({...d, source: 'SB'})),
-                    ...data.netatmo.outdoor.map(d => ({...d, source: 'NA'}))
+                    ...data.switchbot.outdoor
+                        .filter(d => isSensorVisible('switchbot', d.device_id))
+                        .map(d => ({...d, source: 'SB'})),
+                    ...data.netatmo.outdoor
+                        .filter(d => isSensorVisible('netatmo', d.device_id))
+                        .map(d => ({...d, source: 'NA'}))
                 ];
                 if (outdoorDevices.length > 0) {
                     renderLineChart('chart-outdoor-temp', outdoorDevices, 'temperature', colors);
@@ -958,11 +1288,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 }
             }
 
-            // Indoor charts (if filter enabled)
+            // Indoor charts (if filter enabled, apply sensor filter)
             if (filters.indoor) {
                 const indoorDevices = [
-                    ...data.switchbot.indoor.map(d => ({...d, source: 'SB'})),
-                    ...data.netatmo.indoor.map(d => ({...d, source: 'NA'}))
+                    ...data.switchbot.indoor
+                        .filter(d => isSensorVisible('switchbot', d.device_id))
+                        .map(d => ({...d, source: 'SB'})),
+                    ...data.netatmo.indoor
+                        .filter(d => isSensorVisible('netatmo', d.device_id))
+                        .map(d => ({...d, source: 'NA'}))
                 ];
                 if (indoorDevices.length > 0) {
                     renderLineChart('chart-indoor-temp', indoorDevices, 'temperature', colors);
@@ -973,14 +1307,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 }
             }
 
-            // Wind chart (if filter enabled)
+            // Wind chart (if filter enabled, apply sensor filter)
             if (filters.wind && data.netatmo.wind.length > 0) {
-                renderWindChart('chart-wind', data.netatmo.wind);
+                const filteredWind = data.netatmo.wind.filter(d => isSensorVisible('netatmo', d.device_id));
+                if (filteredWind.length > 0) {
+                    renderWindChart('chart-wind', filteredWind);
+                }
             }
 
-            // Rain chart (if filter enabled)
+            // Rain chart (if filter enabled, apply sensor filter)
             if (filters.rain && data.netatmo.rain.length > 0) {
-                renderRainChart('chart-rain', data.netatmo.rain);
+                const filteredRain = data.netatmo.rain.filter(d => isSensorVisible('netatmo', d.device_id));
+                if (filteredRain.length > 0) {
+                    renderRainChart('chart-rain', filteredRain);
+                }
             }
         }
 
