@@ -1226,6 +1226,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         // ========== Toast Notification System ==========
         let lastEventTimestamp = null;
         const shownEventIds = new Set();
+        let isFirstPoll = true;  // Skip toast on first poll
 
         function showToast(message, icon = '🔔', type = 'security') {
             const container = document.getElementById('toastContainer');
@@ -1274,20 +1275,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     for (const event of newEvents) {
                         shownEventIds.add(event.id);
 
-                        // Extract icon from message or use default
-                        let icon = '🔔';
-                        const firstChar = event.message.charAt(0);
-                        if (firstChar && firstChar.codePointAt(0) > 0x1F300) {
-                            icon = firstChar;
-                        }
+                        // Only show toast after first poll (skip initial load)
+                        if (!isFirstPoll) {
+                            // Extract icon from message or use default
+                            let icon = '🔔';
+                            const firstChar = event.message.charAt(0);
+                            if (firstChar && firstChar.codePointAt(0) > 0x1F300) {
+                                icon = firstChar;
+                            }
 
-                        showToast(event.message, icon, 'security');
+                            showToast(event.message, icon, 'security');
+                        }
 
                         // Update last timestamp
                         if (!lastEventTimestamp || event.recorded_at > lastEventTimestamp) {
                             lastEventTimestamp = event.recorded_at;
                         }
                     }
+
+                    // After first poll, enable toast notifications
+                    isFirstPoll = false;
                 }
 
                 // Keep only last 100 event IDs in memory
