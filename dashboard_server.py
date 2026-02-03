@@ -202,7 +202,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             device_states_rows = cursor.fetchall()
 
-            # Also get the latest event for each security device from history
+            # Get latest event for each security device from history (by device_id)
             cursor.execute('''
                 SELECT device_id, device_name, device_type, status_json, recorded_at,
                        ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY recorded_at DESC) as rn
@@ -211,13 +211,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
             ''', self.SECURITY_DEVICE_TYPES)
 
             history_rows = cursor.fetchall()
+
+            # Also get latest event by device_name (for cases where device_id differs)
+            cursor.execute('''
+                SELECT device_id, device_name, device_type, status_json, recorded_at,
+                       ROW_NUMBER() OVER (PARTITION BY device_name ORDER BY recorded_at DESC) as rn
+                FROM device_history
+                WHERE device_type IN (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', self.SECURITY_DEVICE_TYPES)
+
+            history_by_name_rows = cursor.fetchall()
             conn.close()
 
-            # Build a map of latest history per device
-            latest_history = {}
+            # Build maps of latest history per device (by id and by name)
+            latest_history_by_id = {}
             for row in history_rows:
                 if row['rn'] == 1:  # Latest entry
-                    latest_history[row['device_id']] = {
+                    latest_history_by_id[row['device_id']] = {
+                        'status_json': row['status_json'],
+                        'recorded_at': row['recorded_at']
+                    }
+
+            latest_history_by_name = {}
+            for row in history_by_name_rows:
+                if row['rn'] == 1:  # Latest entry
+                    latest_history_by_name[row['device_name']] = {
                         'status_json': row['status_json'],
                         'recorded_at': row['recorded_at']
                     }
@@ -225,14 +243,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
             for row in device_states_rows:
                 status = json.loads(row['status_json']) if row['status_json'] else {}
                 updated_at = row['updated_at']
-
-                # Check if history has more recent data
                 device_id = row['device_id']
-                if device_id in latest_history:
-                    hist = latest_history[device_id]
+                device_name = row['device_name']
+
+                # Try to find history by device_id first, then by device_name
+                hist = latest_history_by_id.get(device_id) or latest_history_by_name.get(device_name)
+
+                if hist:
                     hist_status = json.loads(hist['status_json']) if hist['status_json'] else {}
                     # Merge history status into current status (history takes precedence for state fields)
-                    for key in ['lockState', 'openState', 'moveDetected']:
+                    for key in ['lockState', 'openState', 'moveDetected', 'brightness']:
                         if key in hist_status:
                             status[key] = hist_status[key]
                     # Use more recent timestamp
@@ -240,14 +260,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         updated_at = hist['recorded_at']
 
                 device_data = {
-                    'device_id': row['device_id'],
-                    'device_name': row['device_name'],
+                    'device_id': device_id,
+                    'device_name': device_name,
                     'device_type': row['device_type'],
                     'status': status,
                     'updated_at': updated_at,
                     'display_status': self._get_security_display_status(row['device_type'], status)
                 }
                 result['security'].append(device_data)
+
+            # Also add devices that are only in history (not in device_states)
+            seen_names = {d['device_name'] for d in result['security']}
+            for row in history_by_name_rows:
+                if row['rn'] == 1 and row['device_name'] not in seen_names:
+                    status = json.loads(row['status_json']) if row['status_json'] else {}
+                    device_data = {
+                        'device_id': row['device_id'],
+                        'device_name': row['device_name'],
+                        'device_type': row['device_type'],
+                        'status': status,
+                        'updated_at': row['recorded_at'],
+                        'display_status': self._get_security_display_status(row['device_type'], status)
+                    }
+                    result['security'].append(device_data)
 
         except Exception as e:
             logging.error("Error getting security devices: %s", e)
