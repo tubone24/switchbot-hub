@@ -40,7 +40,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         """Handle GET requests."""
         if self.path == '/':
             self._serve_dashboard()
-        elif self.path == '/api/data':
+        elif self.path.startswith('/api/data'):
             self._serve_api_data()
         elif self.path.startswith('/api/events'):
             self._serve_api_events()
@@ -67,7 +67,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
 
-        data = self._get_sensor_data()
+        # Parse hours parameter from query string (default: 24)
+        hours = 24
+        if '?' in self.path:
+            query = self.path.split('?')[1]
+            for param in query.split('&'):
+                if param.startswith('hours='):
+                    try:
+                        hours = int(param.split('=')[1])
+                        # Limit to valid range: 1-168 (7 days)
+                        hours = max(1, min(168, hours))
+                    except ValueError:
+                        hours = 24
+
+        data = self._get_sensor_data(hours=hours)
         response = json.dumps(data, ensure_ascii=False, indent=2)
         self.wfile.write(response.encode('utf-8'))
 
@@ -165,8 +178,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         return '{} の状態が変化しました'.format(device_name)
 
-    def _get_sensor_data(self):
-        """Get sensor data from database."""
+    def _get_sensor_data(self, hours=24):
+        """Get sensor data from database.
+
+        Args:
+            hours: Number of hours of history to retrieve (default: 24)
+        """
         if self.db is None:
             return {'error': 'Database not available'}
 
@@ -303,8 +320,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 device_id = device['device_id']
                 device_name = device['device_name']
 
-                # Get last 24 hours data
-                history = self.db.get_sensor_data_last_24h(device_id)
+                # Get history data for the specified period
+                history = self.db.get_sensor_data_last_hours(device_id, hours=hours)
                 if not history:
                     continue
 
@@ -359,8 +376,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 module_type = device.get('module_type', '')
                 is_outdoor = device.get('is_outdoor', False)
 
-                # Get last 24 hours data
-                history = self.db.get_netatmo_data_last_24h(device_id)
+                # Get history data for the specified period
+                history = self.db.get_netatmo_data_last_hours(device_id, hours=hours)
                 if not history:
                     continue
 
@@ -717,6 +734,38 @@ class DashboardHandler(BaseHTTPRequestHandler):
             padding: 6px 12px;
             border-bottom: 1px solid #333;
         }
+        /* Time range selector */
+        .time-range-selector {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+            padding: 4px 12px;
+            background: #1a1a2e;
+            border-radius: 20px;
+        }
+        .time-range-selector label {
+            color: #888;
+            font-size: 0.85em;
+            padding: 0;
+            background: transparent;
+        }
+        .time-range-selector select {
+            background: #16213e;
+            color: #e0e0e0;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 6px 10px;
+            font-size: 0.9em;
+            cursor: pointer;
+        }
+        .time-range-selector select:hover {
+            border-color: #4fc3f7;
+        }
+        .time-range-selector select:focus {
+            outline: none;
+            border-color: #4fc3f7;
+        }
         /* Toast notifications */
         .toast-container {
             position: fixed;
@@ -856,6 +905,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             </button>
             <div class="filter-dropdown-content" id="dropdown-content-netatmo"></div>
         </div>
+
+        <!-- Time range selector -->
+        <div class="time-range-selector">
+            <label for="time-range">Period:</label>
+            <select id="time-range" onchange="onTimeRangeChange()">
+                <option value="12">12h</option>
+                <option value="24" selected>24h</option>
+                <option value="72">3d</option>
+                <option value="168">7d</option>
+            </select>
+        </div>
     </div>
 
     <div id="content">
@@ -885,6 +945,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
             switchbot: null,
             netatmo: null
         };
+
+        // Selected time range in hours
+        let selectedHours = 24;
+
+        // Get time axis configuration based on selected period
+        function getTimeAxisConfig() {
+            if (selectedHours <= 24) {
+                return { unit: 'hour', displayFormats: { hour: 'HH:mm' } };
+            } else if (selectedHours <= 72) {
+                return { unit: 'hour', displayFormats: { hour: 'M/d HH:mm' } };
+            } else {
+                return { unit: 'day', displayFormats: { day: 'M/d' } };
+            }
+        }
+
+        // Handle time range change
+        function onTimeRangeChange() {
+            selectedHours = parseInt(document.getElementById('time-range').value);
+            loadDashboard();
+        }
 
         // Initialize filter checkboxes
         document.querySelectorAll('.filter-bar input[id^="filter-"]').forEach(checkbox => {
@@ -1023,7 +1103,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         async function loadDashboard() {
             try {
-                const response = await fetch('/api/data');
+                const response = await fetch('/api/data?hours=' + selectedHours);
                 const data = await response.json();
                 currentData = data;
 
@@ -1226,6 +1306,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 html += '<div class="chart-wrapper"><canvas id="chart-' + title.toLowerCase() + '-noise"></canvas></div></div>';
             }
 
+            // Add light level chart if any device has it
+            const hasLight = devices.some(d => d.latest && d.latest.light_level !== null && d.latest.light_level !== undefined);
+            if (hasLight) {
+                html += '<div class="chart-container"><h3>Light Level (照度)</h3>';
+                html += '<div class="chart-wrapper"><canvas id="chart-' + title.toLowerCase() + '-light"></canvas></div></div>';
+            }
+
             html += '</div>';
             return html;
         }
@@ -1257,6 +1344,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             html += '</div>';
             html += '<div class="chart-container"><h3>Wind Speed</h3>';
             html += '<div class="chart-wrapper"><canvas id="chart-wind"></canvas></div></div>';
+            html += '<div class="chart-container"><h3>Wind Direction (風向)</h3>';
+            html += '<div class="chart-wrapper"><canvas id="chart-wind-angle"></canvas></div></div>';
             html += '</div>';
             return html;
         }
@@ -1339,6 +1428,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     renderLineChart('chart-indoor-co2', indoorDevices, 'co2', colors);
                     renderLineChart('chart-indoor-pressure', indoorDevices, 'pressure', colors);
                     renderLineChart('chart-indoor-noise', indoorDevices, 'noise', colors);
+                    renderLineChart('chart-indoor-light', indoorDevices, 'light_level', colors);
+                }
+            }
+
+            // Outdoor light chart (if any outdoor device has light_level)
+            if (filters.outdoor) {
+                const outdoorDevices = [
+                    ...data.switchbot.outdoor
+                        .filter(d => isSensorVisible('switchbot', d.device_id))
+                        .map(d => ({...d, source: 'SB'})),
+                    ...data.netatmo.outdoor
+                        .filter(d => isSensorVisible('netatmo', d.device_id))
+                        .map(d => ({...d, source: 'NA'}))
+                ];
+                if (outdoorDevices.length > 0) {
+                    renderLineChart('chart-outdoor-light', outdoorDevices, 'light_level', colors);
                 }
             }
 
@@ -1347,6 +1452,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 const filteredWind = data.netatmo.wind.filter(d => isSensorVisible('netatmo', d.device_id));
                 if (filteredWind.length > 0) {
                     renderWindChart('chart-wind', filteredWind);
+                    renderWindAngleChart('chart-wind-angle', filteredWind);
                 }
             }
 
@@ -1409,10 +1515,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     scales: {
                         x: {
                             type: 'time',
-                            time: {
-                                unit: 'hour',
-                                displayFormats: { hour: 'HH:mm' }
-                            }
+                            time: getTimeAxisConfig()
                         },
                         y: {
                             beginAtZero: false
@@ -1421,6 +1524,55 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 }
             });
         }
+
+        // Wind direction arrow plugin
+        const windDirectionArrowPlugin = {
+            id: 'windDirectionArrows',
+            afterDraw(chart) {
+                const ctx = chart.ctx;
+                chart.data.datasets.forEach((dataset, datasetIndex) => {
+                    const windDirections = dataset.windDirections;
+                    if (!windDirections) return;
+
+                    const meta = chart.getDatasetMeta(datasetIndex);
+                    meta.data.forEach((element, index) => {
+                        const direction = windDirections[index];
+                        if (direction == null || isNaN(direction)) return;
+
+                        const { x, y } = element;
+                        const size = 14;
+                        // Wind angle: 0=N, 90=E, 180=S, 270=W
+                        // Arrow points in the direction wind is blowing TO (from + 180)
+                        const angleRad = ((direction + 180) * Math.PI) / 180;
+
+                        ctx.save();
+                        ctx.translate(x, y - size - 2);
+                        ctx.rotate(angleRad);
+
+                        ctx.beginPath();
+                        ctx.strokeStyle = 'rgba(120, 144, 156, 0.85)';
+                        ctx.fillStyle = 'rgba(120, 144, 156, 0.85)';
+                        ctx.lineWidth = 1.5;
+                        ctx.lineCap = 'round';
+
+                        // Shaft
+                        ctx.moveTo(0, -size / 2);
+                        ctx.lineTo(0, size / 2);
+                        ctx.stroke();
+
+                        // Arrowhead
+                        ctx.beginPath();
+                        ctx.moveTo(0, -size / 2);
+                        ctx.lineTo(-3, -size / 2 + 5);
+                        ctx.lineTo(3, -size / 2 + 5);
+                        ctx.closePath();
+                        ctx.fill();
+
+                        ctx.restore();
+                    });
+                });
+            }
+        };
 
         function renderWindChart(canvasId, devices) {
             if (!document.getElementById(canvasId)) return;
@@ -1442,8 +1594,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     y: h.gust_strength / 3.6  // Convert km/h to m/s
                 }));
 
+            // Extract wind directions aligned with gust data points
+            const windDirections = device.history
+                .filter(h => h.gust_strength !== null)
+                .map(h => h.wind_angle);
+
             createChart(canvasId, {
                 type: 'line',
+                plugins: [windDirectionArrowPlugin],
                 data: {
                     datasets: [
                         {
@@ -1464,6 +1622,83 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             borderWidth: 2,
                             tension: 0.3,
                             pointRadius: 0,
+                            fill: false,
+                            windDirections: windDirections
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'top' },
+                        tooltip: {
+                            callbacks: {
+                                afterLabel: function(context) {
+                                    if (context.datasetIndex === 1) {
+                                        const dirs = context.dataset.windDirections;
+                                        if (dirs && dirs[context.dataIndex] != null) {
+                                            const angle = dirs[context.dataIndex];
+                                            const directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                                                                'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+                                            const dir = directions[Math.round(angle / 22.5) % 16];
+                                            return 'Direction: ' + angle + '° (' + dir + ')';
+                                        }
+                                    }
+                                    return '';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: getTimeAxisConfig()
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: 'm/s' }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderWindAngleChart(canvasId, devices) {
+            if (!document.getElementById(canvasId)) return;
+
+            const device = devices[0];
+            if (!device || !device.history) return;
+
+            const angleData = device.history
+                .filter(h => h.wind_angle !== null && h.wind_angle !== undefined)
+                .map(h => ({
+                    x: new Date(h.recorded_at),
+                    y: h.wind_angle
+                }));
+
+            if (angleData.length === 0) return;
+
+            // Convert angle to direction label
+            function angleToDirection(angle) {
+                const directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                                    'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+                const index = Math.round(angle / 22.5) % 16;
+                return directions[index];
+            }
+
+            createChart(canvasId, {
+                type: 'line',
+                data: {
+                    datasets: [
+                        {
+                            label: 'Wind Direction (°)',
+                            data: angleData,
+                            borderColor: 'rgba(120, 144, 156, 1)',
+                            backgroundColor: 'rgba(120, 144, 156, 0.2)',
+                            borderWidth: 2,
+                            tension: 0,
+                            pointRadius: 2,
                             fill: false
                         }
                     ]
@@ -1472,19 +1707,33 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: { position: 'top' }
+                        legend: { position: 'top' },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const angle = context.parsed.y;
+                                    const dir = angleToDirection(angle);
+                                    return angle + '° (' + dir + ')';
+                                }
+                            }
+                        }
                     },
                     scales: {
                         x: {
                             type: 'time',
-                            time: {
-                                unit: 'hour',
-                                displayFormats: { hour: 'HH:mm' }
-                            }
+                            time: getTimeAxisConfig()
                         },
                         y: {
-                            beginAtZero: true,
-                            title: { display: true, text: 'm/s' }
+                            min: 0,
+                            max: 360,
+                            title: { display: true, text: '° (N=0, E=90, S=180, W=270)' },
+                            ticks: {
+                                stepSize: 45,
+                                callback: function(value) {
+                                    const labels = {0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW', 360: 'N'};
+                                    return labels[value] || value + '°';
+                                }
+                            }
                         }
                     }
                 }
@@ -1516,14 +1765,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 data: {
                     datasets: [
                         {
+                            type: 'bar',
                             label: 'Rain 1h (mm)',
                             data: rain1hData,
                             borderColor: 'rgba(92, 107, 192, 1)',
-                            backgroundColor: 'rgba(92, 107, 192, 0.3)',
-                            borderWidth: 2,
-                            tension: 0,
-                            pointRadius: 0,
-                            fill: true,
+                            backgroundColor: 'rgba(92, 107, 192, 0.5)',
+                            borderWidth: 1,
                             yAxisID: 'y'
                         },
                         {
@@ -1548,10 +1795,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     scales: {
                         x: {
                             type: 'time',
-                            time: {
-                                unit: 'hour',
-                                displayFormats: { hour: 'HH:mm' }
-                            }
+                            time: getTimeAxisConfig()
                         },
                         y: {
                             type: 'linear',
