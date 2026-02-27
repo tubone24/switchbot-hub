@@ -427,6 +427,14 @@ class SwitchBotMonitor:
             previous = self.db.get_device_state(device_id)
             previous_status = previous['status'] if previous else None
 
+            # Update device name in sensor_timeseries if name changed (same MAC, renamed device)
+            if previous and previous['device_name'] != device_name:
+                logging.info(
+                    "Device name changed: '%s' -> '%s' (id=%s)",
+                    previous['device_name'], device_name, device_id
+                )
+                self.db.update_sensor_device_name(device_id, device_name)
+
             # Save new state
             changed = self.db.save_device_state(
                 device_id,
@@ -485,6 +493,14 @@ class SwitchBotMonitor:
                 # Get previous state
                 previous = self.db.get_device_state(device_id)
                 previous_status = previous['status'] if previous else None
+
+                # Update device name in sensor_timeseries if name changed
+                if previous and previous['device_name'] != device_name:
+                    logging.info(
+                        "Device name changed: '%s' -> '%s' (id=%s)",
+                        previous['device_name'], device_name, device_id
+                    )
+                    self.db.update_sensor_device_name(device_id, device_name)
 
                 # Save new state
                 changed = self.db.save_device_state(
@@ -960,7 +976,7 @@ class SwitchBotMonitor:
         """Check if device type is a sensor that records time series data."""
         sensor_types = [
             'Meter', 'MeterPlus', 'MeterPro', 'MeterPro(CO2)',
-            'WoIOSensor', 'Hub 2', 'Outdoor Meter'
+            'WoIOSensor', 'Hub 2', 'Hub 3', 'Outdoor Meter'
         ]
         return device_type in sensor_types
 

@@ -5,6 +5,7 @@ Python 3.7+ compatible, uses only standard library.
 """
 import sqlite3
 import json
+import logging
 import os
 from datetime import datetime, timedelta
 
@@ -573,9 +574,43 @@ class DeviceDatabase:
             result.append(item)
         return result
 
+    def update_sensor_device_name(self, device_id, new_name):
+        """
+        Update device_name for all records of a device in sensor_timeseries.
+        Used when a device is renamed (same deviceMac, different name).
+
+        Args:
+            device_id: Device ID
+            new_name: New device name
+
+        Returns:
+            int: Number of updated records
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            UPDATE sensor_timeseries
+            SET device_name = ?
+            WHERE device_id = ? AND device_name != ?
+        ''', (new_name, device_id, new_name))
+
+        updated = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if updated > 0:
+            logging.info(
+                "Updated device name to '%s' for %d records (device_id=%s)",
+                new_name, updated, device_id
+            )
+
+        return updated
+
     def get_all_sensor_devices(self):
         """
         Get list of devices with sensor data.
+        Uses the most recent device_name for each device_id.
 
         Returns:
             list: List of device info dicts
@@ -583,9 +618,13 @@ class DeviceDatabase:
         conn = self._get_connection()
         cursor = conn.cursor()
 
+        # Use subquery to get the latest name for each device_id
         cursor.execute('''
-            SELECT DISTINCT device_id, device_name
+            SELECT device_id, device_name
             FROM sensor_timeseries
+            WHERE id IN (
+                SELECT MAX(id) FROM sensor_timeseries GROUP BY device_id
+            )
             ORDER BY device_name
         ''')
 
