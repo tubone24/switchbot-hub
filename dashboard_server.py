@@ -1525,6 +1525,55 @@ class DashboardHandler(BaseHTTPRequestHandler):
             });
         }
 
+        // Wind direction arrow plugin
+        const windDirectionArrowPlugin = {
+            id: 'windDirectionArrows',
+            afterDraw(chart) {
+                const ctx = chart.ctx;
+                chart.data.datasets.forEach((dataset, datasetIndex) => {
+                    const windDirections = dataset.windDirections;
+                    if (!windDirections) return;
+
+                    const meta = chart.getDatasetMeta(datasetIndex);
+                    meta.data.forEach((element, index) => {
+                        const direction = windDirections[index];
+                        if (direction == null || isNaN(direction)) return;
+
+                        const { x, y } = element;
+                        const size = 14;
+                        // Wind angle: 0=N, 90=E, 180=S, 270=W
+                        // Arrow points in the direction wind is blowing TO (from + 180)
+                        const angleRad = ((direction + 180) * Math.PI) / 180;
+
+                        ctx.save();
+                        ctx.translate(x, y - size - 2);
+                        ctx.rotate(angleRad);
+
+                        ctx.beginPath();
+                        ctx.strokeStyle = 'rgba(120, 144, 156, 0.85)';
+                        ctx.fillStyle = 'rgba(120, 144, 156, 0.85)';
+                        ctx.lineWidth = 1.5;
+                        ctx.lineCap = 'round';
+
+                        // Shaft
+                        ctx.moveTo(0, -size / 2);
+                        ctx.lineTo(0, size / 2);
+                        ctx.stroke();
+
+                        // Arrowhead
+                        ctx.beginPath();
+                        ctx.moveTo(0, -size / 2);
+                        ctx.lineTo(-3, -size / 2 + 5);
+                        ctx.lineTo(3, -size / 2 + 5);
+                        ctx.closePath();
+                        ctx.fill();
+
+                        ctx.restore();
+                    });
+                });
+            }
+        };
+
         function renderWindChart(canvasId, devices) {
             if (!document.getElementById(canvasId)) return;
 
@@ -1545,8 +1594,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     y: h.gust_strength / 3.6  // Convert km/h to m/s
                 }));
 
+            // Extract wind directions aligned with wind speed data points
+            const windDirections = device.history
+                .filter(h => h.wind_strength !== null)
+                .map(h => h.wind_angle);
+
             createChart(canvasId, {
                 type: 'line',
+                plugins: [windDirectionArrowPlugin],
                 data: {
                     datasets: [
                         {
@@ -1557,7 +1612,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             borderWidth: 2,
                             tension: 0.3,
                             pointRadius: 0,
-                            fill: true
+                            fill: true,
+                            windDirections: windDirections
                         },
                         {
                             label: 'Gust (m/s)',
@@ -1575,7 +1631,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: { position: 'top' }
+                        legend: { position: 'top' },
+                        tooltip: {
+                            callbacks: {
+                                afterLabel: function(context) {
+                                    if (context.datasetIndex === 0) {
+                                        const dirs = context.dataset.windDirections;
+                                        if (dirs && dirs[context.dataIndex] != null) {
+                                            const angle = dirs[context.dataIndex];
+                                            const directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                                                                'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+                                            const dir = directions[Math.round(angle / 22.5) % 16];
+                                            return 'Direction: ' + angle + '° (' + dir + ')';
+                                        }
+                                    }
+                                    return '';
+                                }
+                            }
+                        }
                     },
                     scales: {
                         x: {
@@ -1692,14 +1765,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 data: {
                     datasets: [
                         {
+                            type: 'bar',
                             label: 'Rain 1h (mm)',
                             data: rain1hData,
                             borderColor: 'rgba(92, 107, 192, 1)',
-                            backgroundColor: 'rgba(92, 107, 192, 0.3)',
-                            borderWidth: 2,
-                            tension: 0,
-                            pointRadius: 0,
-                            fill: true,
+                            backgroundColor: 'rgba(92, 107, 192, 0.5)',
+                            borderWidth: 1,
                             yAxisID: 'y'
                         },
                         {
