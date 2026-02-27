@@ -1594,9 +1594,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     y: h.gust_strength / 3.6  // Convert km/h to m/s
                 }));
 
-            // Extract wind directions aligned with wind speed data points
+            // Extract wind directions aligned with gust data points
             const windDirections = device.history
-                .filter(h => h.wind_strength !== null)
+                .filter(h => h.gust_strength !== null)
                 .map(h => h.wind_angle);
 
             createChart(canvasId, {
@@ -1612,8 +1612,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             borderWidth: 2,
                             tension: 0.3,
                             pointRadius: 0,
-                            fill: true,
-                            windDirections: windDirections
+                            fill: true
                         },
                         {
                             label: 'Gust (m/s)',
@@ -1623,7 +1622,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             borderWidth: 2,
                             tension: 0.3,
                             pointRadius: 0,
-                            fill: false
+                            fill: false,
+                            windDirections: windDirections
                         }
                     ]
                 },
@@ -1635,7 +1635,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         tooltip: {
                             callbacks: {
                                 afterLabel: function(context) {
-                                    if (context.datasetIndex === 0) {
+                                    if (context.datasetIndex === 1) {
                                         const dirs = context.dataset.windDirections;
                                         if (dirs && dirs[context.dataIndex] != null) {
                                             const angle = dirs[context.dataIndex];
