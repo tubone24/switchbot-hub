@@ -1530,19 +1530,56 @@ class DashboardHandler(BaseHTTPRequestHandler):
             id: 'windDirectionArrows',
             afterDraw(chart) {
                 const ctx = chart.ctx;
+                const SAME_DIR_THRESHOLD = 22.5; // degrees - same compass direction
                 chart.data.datasets.forEach((dataset, datasetIndex) => {
                     const windDirections = dataset.windDirections;
                     if (!windDirections) return;
 
                     const meta = chart.getDatasetMeta(datasetIndex);
-                    meta.data.forEach((element, index) => {
+                    const elements = meta.data;
+
+                    // Group consecutive same-direction points
+                    const arrowIndices = [];
+                    let groupStart = null;
+                    let groupDir = null;
+
+                    function angleDiff(a, b) {
+                        let d = Math.abs(a - b) % 360;
+                        return d > 180 ? 360 - d : d;
+                    }
+
+                    for (let i = 0; i <= windDirections.length; i++) {
+                        const dir = i < windDirections.length ? windDirections[i] : null;
+                        const valid = dir != null && !isNaN(dir);
+
+                        if (valid && groupStart != null && angleDiff(dir, groupDir) <= SAME_DIR_THRESHOLD) {
+                            // Continue current group
+                            continue;
+                        }
+
+                        // End previous group if exists
+                        if (groupStart != null) {
+                            const midIndex = Math.floor((groupStart + (i - 1)) / 2);
+                            arrowIndices.push(midIndex);
+                        }
+
+                        // Start new group
+                        if (valid) {
+                            groupStart = i;
+                            groupDir = dir;
+                        } else {
+                            groupStart = null;
+                            groupDir = null;
+                        }
+                    }
+
+                    arrowIndices.forEach(index => {
                         const direction = windDirections[index];
-                        if (direction == null || isNaN(direction)) return;
+                        const element = elements[index];
+                        if (!element) return;
 
                         const { x, y } = element;
                         const size = 14;
-                        // Wind angle: 0=N, 90=E, 180=S, 270=W
-                        // Arrow points in the direction wind is blowing TO (from + 180)
                         const angleRad = ((direction + 180) * Math.PI) / 180;
 
                         ctx.save();

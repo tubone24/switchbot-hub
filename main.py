@@ -110,6 +110,7 @@ def build_device_map(api, config):
 
     ignore_patterns = config.get('monitor', {}).get('ignore_devices', [])
     polling_patterns = config.get('monitor', {}).get('polling_devices', [])
+    type_overrides = config.get('monitor', {}).get('device_type_overrides', {})
 
     device_map = {}
 
@@ -117,6 +118,10 @@ def build_device_map(api, config):
         device_id = device.get('deviceId')
         device_name = device.get('deviceName', 'Unknown')
         device_type = device.get('deviceType', 'Unknown')
+
+        # Apply device type override from config
+        if device_name in type_overrides:
+            device_type = type_overrides[device_name]
 
         # Determine category
         if matches_filter(device_name, ignore_patterns):
@@ -449,13 +454,13 @@ class SwitchBotMonitor:
                 logging.debug("Saved webhook sensor data for %s", device_name)
 
             # Send notification based on device category
-            if changed:
-                category = self.slack.get_device_category(device_type)
+            category = self.slack.get_device_category(device_type)
 
-                if category == 'security':
-                    # Security notification to #home-security
-                    self.slack.notify_security_event(device_name, device_type, status)
-                elif category == 'atmos':
+            if category == 'security':
+                # Security devices always notify on event (not just state changes)
+                self.slack.notify_security_event(device_name, device_type, status)
+            elif changed:
+                if category == 'atmos':
                     # Atmosphere notification to #atmos-update
                     self.slack.notify_atmos_update(device_name, device_type, status)
                 else:

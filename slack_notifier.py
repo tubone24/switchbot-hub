@@ -17,7 +17,11 @@ class SlackNotifier:
         'Smart Lock', 'Smart Lock Pro', 'Lock',
         'Contact Sensor', 'Motion Sensor',
         'Keypad', 'Keypad Touch',
-        'Video Doorbell'
+        'Video Doorbell',
+        'Indoor Cam', 'WoCamera',
+        'Pan/Tilt Cam', 'Pan/Tilt Cam 2K', 'Pan/Tilt Cam Plus 3K',
+        'WoPanTiltCam', 'WoPanTiltCam2K', 'WoCamKvs3mp',
+        'Outdoor Spotlight Cam', 'Outdoor Spotlight Cam 2K',
     ]
 
     # Atmosphere sensor device types
@@ -261,7 +265,24 @@ class SlackNotifier:
 
         # Video Doorbell
         if device_type == 'Video Doorbell':
+            detection_state = status.get('detectionState', '')
+            if detection_state == 'DETECTED':
+                return "{}が動きを検知しました".format(device_name)
             return "{}が押されました".format(device_name)
+
+        # Camera devices (Indoor Cam, Pan/Tilt Cam, Outdoor Spotlight Cam, etc.)
+        camera_types = [
+            'Indoor Cam', 'WoCamera',
+            'Pan/Tilt Cam', 'Pan/Tilt Cam 2K', 'Pan/Tilt Cam Plus 3K',
+            'WoPanTiltCam', 'WoPanTiltCam2K', 'WoCamKvs3mp',
+            'Outdoor Spotlight Cam', 'Outdoor Spotlight Cam 2K',
+        ]
+        if device_type in camera_types:
+            detection_state = status.get('detectionState', '')
+            if detection_state == 'DETECTED':
+                return "{}が動きを検知しました".format(device_name)
+            else:
+                return "{}の動き検知がクリアされました".format(device_name)
 
         # Default
         return "{}の状態が変わりました".format(device_name)
