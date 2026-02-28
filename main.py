@@ -110,6 +110,7 @@ def build_device_map(api, config):
 
     ignore_patterns = config.get('monitor', {}).get('ignore_devices', [])
     polling_patterns = config.get('monitor', {}).get('polling_devices', [])
+    type_overrides = config.get('monitor', {}).get('device_type_overrides', {})
 
     device_map = {}
 
@@ -117,6 +118,10 @@ def build_device_map(api, config):
         device_id = device.get('deviceId')
         device_name = device.get('deviceName', 'Unknown')
         device_type = device.get('deviceType', 'Unknown')
+
+        # Apply device type override from config
+        if device_name in type_overrides:
+            device_type = type_overrides[device_name]
 
         # Determine category
         if matches_filter(device_name, ignore_patterns):

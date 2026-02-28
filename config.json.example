@@ -62,7 +62,10 @@
             "CO2センサー（温湿度計） 17",
             "防水温湿度計 1C",
             "ハブ２ 19"
-        ]
+        ],
+        "device_type_overrides": {
+            "庭": "Outdoor Spotlight Cam"
+        }
     },
     "webhook": {
         "enabled": true,
