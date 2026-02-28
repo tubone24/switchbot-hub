@@ -449,13 +449,13 @@ class SwitchBotMonitor:
                 logging.debug("Saved webhook sensor data for %s", device_name)
 
             # Send notification based on device category
-            if changed:
-                category = self.slack.get_device_category(device_type)
+            category = self.slack.get_device_category(device_type)
 
-                if category == 'security':
-                    # Security notification to #home-security
-                    self.slack.notify_security_event(device_name, device_type, status)
-                elif category == 'atmos':
+            if category == 'security':
+                # Security devices always notify on event (not just state changes)
+                self.slack.notify_security_event(device_name, device_type, status)
+            elif changed:
+                if category == 'atmos':
                     # Atmosphere notification to #atmos-update
                     self.slack.notify_atmos_update(device_name, device_type, status)
                 else:

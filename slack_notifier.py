@@ -261,6 +261,9 @@ class SlackNotifier:
 
         # Video Doorbell
         if device_type == 'Video Doorbell':
+            detection_state = status.get('detectionState', '')
+            if detection_state == 'DETECTED':
+                return "{}が動きを検知しました".format(device_name)
             return "{}が押されました".format(device_name)
 
         # Default
