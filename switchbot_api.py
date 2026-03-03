@@ -70,9 +70,9 @@ class SwitchBotAPI:
         headers = self._generate_headers()
 
         if method.upper() == 'GET':
-            response = requests.get(url, headers=headers, timeout=30)
+            response = requests.get(url, headers=headers, timeout=(5, 25))
         elif method.upper() == 'POST':
-            response = requests.post(url, headers=headers, json=data, timeout=30)
+            response = requests.post(url, headers=headers, json=data, timeout=(5, 25))
         else:
             raise ValueError("Unsupported HTTP method: {}".format(method))
 

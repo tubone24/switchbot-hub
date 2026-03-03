@@ -25,6 +25,7 @@ from cloudflare_tunnel import CloudflareTunnel
 from chart_generator import ChartGenerator
 from garbage_notifier import GarbageNotifier
 from dashboard_server import DashboardServer
+from network_resilience import NetworkHealthChecker
 
 # Optional: Local chart generator for Raspberry Pi (requires matplotlib)
 try:
@@ -150,6 +151,9 @@ class SwitchBotMonitor:
         """Initialize monitor with configuration."""
         self.config = config
 
+        # Initialize network health checker
+        self.network_checker = NetworkHealthChecker()
+
         # Initialize SwitchBot API
         switchbot_config = config['switchbot']
         self.api = SwitchBotAPI(
@@ -166,7 +170,8 @@ class SwitchBotMonitor:
                     client_id=netatmo_config['client_id'],
                     client_secret=netatmo_config['client_secret'],
                     refresh_token=netatmo_config['refresh_token'],
-                    credentials_file=netatmo_config.get('credentials_file')
+                    credentials_file=netatmo_config.get('credentials_file'),
+                    network_checker=self.network_checker
                 )
                 logging.info("Netatmo API initialized")
             except Exception as e:
@@ -213,7 +218,7 @@ class SwitchBotMonitor:
 
         # Initialize Slack with new multi-channel config
         slack_config = config.get('slack', {})
-        self.slack = SlackNotifier(slack_config)
+        self.slack = SlackNotifier(slack_config, network_checker=self.network_checker)
 
         # Device map
         self.device_map = {}
@@ -530,7 +535,7 @@ class SwitchBotMonitor:
 
             except Exception as e:
                 logging.error("Error polling %s: %s", device_name, e)
-                if self.config.get('slack', {}).get('notify_errors', False):
+                if self.config.get('slack', {}).get('notify_errors', False) and self.network_checker.is_healthy():
                     self.slack.notify_error(str(e), device_name)
 
     def poll_netatmo(self):
@@ -615,7 +620,7 @@ class SwitchBotMonitor:
 
         except Exception as e:
             logging.error("Error polling Netatmo: %s", e)
-            if self.config.get('slack', {}).get('notify_errors', False):
+            if self.config.get('slack', {}).get('notify_errors', False) and self.network_checker.is_healthy():
                 self.slack.notify_error("Netatmo: {}".format(str(e)))
 
     def poll_nest(self):
@@ -677,7 +682,7 @@ class SwitchBotMonitor:
 
         except Exception as e:
             logging.error("Error polling Google Nest: %s", e)
-            if self.config.get('slack', {}).get('notify_errors', False):
+            if self.config.get('slack', {}).get('notify_errors', False) and self.network_checker.is_healthy():
                 self.slack.notify_error("Google Nest: {}".format(str(e)))
 
     def handle_nest_event(self, event_type, device_id, device_name, event_data):
@@ -1569,17 +1574,26 @@ class SwitchBotMonitor:
 
             # Check if it's time to poll SwitchBot
             if now - last_poll >= interval:
-                self.poll_devices()
+                if self.network_checker.is_healthy():
+                    self.poll_devices()
+                else:
+                    logging.warning("ネットワーク不通のためSwitchBotポーリングをスキップ")
                 last_poll = now
 
             # Check if it's time to poll Netatmo
             if self.netatmo_api and now - self.last_netatmo_poll >= netatmo_interval:
-                self.poll_netatmo()
+                if self.network_checker.is_healthy():
+                    self.poll_netatmo()
+                else:
+                    logging.warning("ネットワーク不通のためNetatmoポーリングをスキップ")
                 self.last_netatmo_poll = now
 
             # Check if it's time to poll Google Nest
             if self.nest_api and now - self.last_nest_poll >= nest_interval:
-                self.poll_nest()
+                if self.network_checker.is_healthy():
+                    self.poll_nest()
+                else:
+                    logging.warning("ネットワーク不通のためGoogle Nestポーリングをスキップ")
                 self.last_nest_poll = now
 
             # Check for graph report (every 5 minutes)

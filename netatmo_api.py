@@ -32,7 +32,8 @@ class NetatmoAPI:
     # Outdoor module types (for is_outdoor flag)
     OUTDOOR_MODULE_TYPES = ['NAModule1', 'NAModule2', 'NAModule3']
 
-    def __init__(self, client_id, client_secret, refresh_token, credentials_file=None):
+    def __init__(self, client_id, client_secret, refresh_token, credentials_file=None,
+                 network_checker=None):
         """
         Initialize Netatmo API client.
 
@@ -41,11 +42,13 @@ class NetatmoAPI:
             client_secret: Netatmo app client secret
             refresh_token: OAuth2 refresh token
             credentials_file: Optional file path to persist updated refresh token
+            network_checker: Optional NetworkHealthChecker instance
         """
         self.client_id = client_id
         self.client_secret = client_secret
         self.refresh_token = refresh_token
         self.credentials_file = credentials_file
+        self.network_checker = network_checker
 
         self.access_token = None
         self.token_expires_at = 0
@@ -72,7 +75,7 @@ class NetatmoAPI:
                 self.AUTH_URL,
                 data=payload,
                 headers=headers,
-                timeout=30
+                timeout=(5, 25)
             )
             response.raise_for_status()
             data = response.json()
@@ -132,6 +135,10 @@ class NetatmoAPI:
         Returns:
             dict: Response body
         """
+        # Network health check
+        if self.network_checker and not self.network_checker.is_healthy():
+            raise requests.exceptions.ConnectionError("ネットワーク不通のためリクエストをスキップ")
+
         self._ensure_valid_token()
 
         url = self.API_BASE + endpoint
@@ -145,7 +152,7 @@ class NetatmoAPI:
                 url,
                 headers=headers,
                 params=params,
-                timeout=30
+                timeout=(5, 25)
             )
             response.raise_for_status()
             return response.json()
