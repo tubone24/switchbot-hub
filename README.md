@@ -822,6 +822,73 @@ sudo supervisorctl update
 sudo supervisorctl start switchbot-monitor
 ```
 
+## ネットワークWatchdog（自動再起動）
+
+Raspberry Piでネットワークが長時間不通になると、cloudflaredやPub/Subの再接続が復旧せずハングすることがあります。`network_watchdog.sh` はcronで定期的にネットワーク疎通を確認し、一定時間不通が続いた場合にRaspberry Piを自動で再起動します。
+
+### 動作の仕組み
+
+| 経過時間 | 動作 |
+|---------|------|
+| 0〜5分 | ping失敗 → 失敗カウント 1/3 |
+| 5〜10分 | ping失敗 → 失敗カウント 2/3 |
+| 10〜15分 | ping失敗 → 失敗カウント 3/3 → **自動reboot** |
+| (途中で復帰) | ping成功 → カウントリセット |
+
+- 3つのDNSサーバー（8.8.8.8, 1.1.1.1, 9.9.9.9）に対してpingし、**全て失敗**した場合のみ不通と判定
+- ログは `/var/log/network_watchdog.log` に記録
+- 閾値やチェック間隔はスクリプト冒頭の変数で調整可能
+
+### セットアップ
+
+#### 1. スクリプトに実行権限を付与
+
+```bash
+chmod +x /home/pi/switchbot-hub/network_watchdog.sh
+```
+
+#### 2. piユーザーがパスワードなしでrebootできるようにする
+
+```bash
+sudo visudo
+```
+
+以下の行を追加:
+
+```
+pi ALL=(ALL) NOPASSWD: /sbin/reboot
+```
+
+#### 3. cronに登録（root権限）
+
+```bash
+sudo crontab -e
+```
+
+以下を追加:
+
+```
+*/5 * * * * /home/pi/switchbot-hub/network_watchdog.sh
+```
+
+#### 4. ログファイルの準備
+
+```bash
+sudo touch /var/log/network_watchdog.log
+sudo chown pi:pi /var/log/network_watchdog.log
+```
+
+### 設定のカスタマイズ
+
+スクリプト冒頭の変数を編集することで動作を調整できます:
+
+| 変数 | デフォルト | 説明 |
+|------|-----------|------|
+| `MAX_FAILURES` | 3 | 再起動までの連続失敗回数（cron間隔 × この値 = 再起動までの時間） |
+| `CHECK_HOSTS` | 8.8.8.8, 1.1.1.1, 9.9.9.9 | チェック対象ホスト |
+| `PING_TIMEOUT` | 5 | pingタイムアウト（秒） |
+| `PING_COUNT` | 2 | ping回数 |
+
 ## API制限について
 
 ### SwitchBot
@@ -859,6 +926,8 @@ switchbot-hub/
 ├── chart_generator.py      # QuickChart.ioでグラフ生成
 ├── local_chart_generator.py # matplotlibでローカルグラフ生成（Raspberry Pi向け）
 ├── dashboard_server.py     # Webダッシュボード HTTPサーバー
+├── network_resilience.py   # ネットワークレジリエンス（ヘルスチェック・サーキットブレーカー）
+├── network_watchdog.sh     # ネットワーク不通時の自動再起動スクリプト
 ├── garbage_images/         # ゴミ種類ごとの画像
 ├── config.json.example     # 設定サンプル
 └── config.json             # 設定ファイル（要作成）
