@@ -264,13 +264,15 @@ class SwitchBotMonitor:
 
         # Outdoor alert tracking (to avoid duplicate alerts)
         self.last_alerts = {
-            'rain': {},        # {device_id: last_alert_time}
             'wind': {},        # {device_id: last_alert_time}
             'temperature': {}, # {device_id: last_alert_time}
             'pressure': {},    # {device_id: last_alert_time}
         }
         # Minimum interval between same type alerts (seconds)
         self.alert_cooldown = 3600  # 1 hour
+
+        # Rain state machine: {device_id: {'is_raining': bool, 'intensity_level': str}}
+        self.rain_state = {}
 
         # Initialize garbage collection notifier
         garbage_config = config.get('garbage_collection', {})
@@ -833,25 +835,125 @@ class SwitchBotMonitor:
             except Exception as e:
                 logging.error("Error checking outdoor alerts for %s: %s", device_name, e)
 
+    def _get_rain_intensity_level(self, rain):
+        """
+        Classify rain intensity based on polling-interval rain value.
+
+        JMA (気象庁) hourly thresholds:
+        - light:    < 3mm/h    弱い雨
+        - moderate: 3-10mm/h   やや強い雨
+        - heavy:    10-20mm/h  強い雨
+        - intense:  20mm/h+    激しい雨
+
+        Thresholds are scaled by (polling_interval_seconds / 3600) to convert
+        hourly criteria to the actual polling interval.
+        """
+        interval_seconds = self.config.get('netatmo', {}).get('interval_seconds', 600)
+        scale = interval_seconds / 3600.0  # e.g. 600/3600 = 1/6
+
+        if rain < 3 * scale:
+            return 'light'
+        elif rain < 10 * scale:
+            return 'moderate'
+        elif rain < 20 * scale:
+            return 'heavy'
+        else:
+            return 'intense'
+
+    @staticmethod
+    def _rain_level_label(level):
+        """Get Japanese label for rain intensity level."""
+        labels = {
+            'light': '弱い雨',
+            'moderate': 'やや強い雨',
+            'heavy': '強い雨',
+            'intense': '激しい雨',
+        }
+        return labels.get(level, level)
+
     def _check_rain_alert(self, device_id, device_name, latest, previous):
-        """Check if rain started."""
-        if not self._can_send_alert('rain', device_id):
+        """
+        Check rain state transitions and send appropriate alerts.
+
+        State machine:
+        - Rain start:  rain >= 0.1mm and was not raining
+        - Rain stop:   last 3 readings all 0.0mm and was raining
+        - Intensity change: rain level changed while raining
+        """
+        current_rain = latest.get('rain')
+        if current_rain is None:
             return
 
-        current_rain = latest.get('rain')
-        previous_rain = previous.get('rain') if previous else None
+        # Initialize state for this device if needed
+        if device_id not in self.rain_state:
+            self.rain_state[device_id] = {
+                'is_raining': False,
+                'intensity_level': None,
+            }
 
-        # Rain started: was 0 (or None), now > 0
-        if current_rain is not None and current_rain > 0:
-            if previous_rain is None or previous_rain == 0:
-                message = "雨が降り始めました"
+        state = self.rain_state[device_id]
+
+        # --- Rain START ---
+        if current_rain >= 0.1 and not state['is_raining']:
+            state['is_raining'] = True
+            state['intensity_level'] = self._get_rain_intensity_level(current_rain)
+
+            level_label = self._rain_level_label(state['intensity_level'])
+            message = "☔ 雨が降り始めました（{}）".format(level_label)
+            details = "現在の雨量: {:.1f}mm | 24h累計: {}mm".format(
+                current_rain,
+                latest.get('rain_24h', '-')
+            )
+            self.slack.notify_outdoor_alert('rain', message, details, level='info')
+            logging.info("[Alert] Rain started (%s): %s", level_label, device_name)
+            return
+
+        # --- While raining: check intensity change ---
+        if state['is_raining'] and current_rain >= 0.1:
+            new_level = self._get_rain_intensity_level(current_rain)
+            old_level = state['intensity_level']
+
+            if new_level != old_level and old_level is not None:
+                old_label = self._rain_level_label(old_level)
+                new_label = self._rain_level_label(new_level)
+
+                # Determine direction
+                levels_order = ['light', 'moderate', 'heavy', 'intense']
+                old_idx = levels_order.index(old_level)
+                new_idx = levels_order.index(new_level)
+
+                if new_idx > old_idx:
+                    message = "⛈ 雨脚が強くなってきました（{} → {}）".format(old_label, new_label)
+                    alert_level = 'warning'
+                else:
+                    message = "🌂 雨脚が弱くなってきました（{} → {}）".format(old_label, new_label)
+                    alert_level = 'info'
+
                 details = "現在の雨量: {:.1f}mm | 24h累計: {}mm".format(
                     current_rain,
                     latest.get('rain_24h', '-')
                 )
+                self.slack.notify_outdoor_alert('rain', message, details, level=alert_level)
+                logging.info("[Alert] Rain intensity changed (%s -> %s): %s",
+                             old_label, new_label, device_name)
+
+            state['intensity_level'] = new_level
+            return
+
+        # --- Rain STOP detection ---
+        if state['is_raining'] and current_rain < 0.1:
+            recent_rains = self.db.get_recent_netatmo_data(device_id, count=3)
+            # Need at least 3 readings, all zero
+            if len(recent_rains) >= 3 and all(
+                r is not None and r < 0.1 for r in recent_rains
+            ):
+                state['is_raining'] = False
+                state['intensity_level'] = None
+
+                message = "🌤 雨がやみました"
+                details = "24h累計: {}mm".format(latest.get('rain_24h', '-'))
                 self.slack.notify_outdoor_alert('rain', message, details, level='info')
-                self._mark_alert_sent('rain', device_id)
-                logging.info("[Alert] Rain started: %s", device_name)
+                logging.info("[Alert] Rain stopped: %s", device_name)
 
     def _check_wind_alert(self, device_id, device_name, latest):
         """Check for strong wind conditions."""

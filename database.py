@@ -1126,6 +1126,33 @@ class DeviceDatabase:
 
         return result
 
+    def get_recent_netatmo_data(self, device_id, count=3):
+        """
+        Get recent N Netatmo rain data entries for a device (rain module).
+        Used for rain stop detection.
+
+        Args:
+            device_id: Device ID
+            count: Number of recent entries to retrieve
+
+        Returns:
+            list: List of rain values (most recent first)
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT rain FROM netatmo_timeseries
+            WHERE device_id = ? AND module_type = 'NAModule3'
+            ORDER BY recorded_at DESC
+            LIMIT ?
+        ''', (device_id, count))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [row['rain'] for row in rows]
+
     def get_previous_netatmo_data(self, device_id, skip=1):
         """
         Get the previous Netatmo data entry (for comparison).
