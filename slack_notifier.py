@@ -5,8 +5,11 @@ Python 3.7+ compatible, requires only requests library.
 Supports multiple channels for different notification types.
 """
 import json
+import logging
 import requests
 from datetime import datetime
+
+from network_resilience import CircuitBreaker
 
 
 class SlackNotifier:
@@ -35,12 +38,13 @@ class SlackNotifier:
         'Doorbell', 'Camera', 'Display', 'Thermostat'
     ]
 
-    def __init__(self, config):
+    def __init__(self, config, network_checker=None):
         """
         Initialize Slack notifier with channel configuration.
 
         Args:
             config: Slack config dict with 'channels' and other settings
+            network_checker: Optional NetworkHealthChecker instance
         """
         self.enabled = config.get('enabled', True)
         self.channels = config.get('channels', {})
@@ -48,6 +52,10 @@ class SlackNotifier:
 
         # Channel IDs for file uploads (different from webhook URLs)
         self.channel_ids = config.get('channel_ids', {})
+
+        # Network resilience
+        self.network_checker = network_checker
+        self.circuit_breaker = CircuitBreaker(name='Slack', failure_threshold=3, recovery_timeout=60)
 
         # Backwards compatibility: if 'webhook_url' is provided, use for all
         if 'webhook_url' in config and not self.channels:
@@ -77,6 +85,16 @@ class SlackNotifier:
             print("[Slack] No webhook URL configured for channel: {}".format(channel))
             return False
 
+        # Network health check - skip immediately if network is down
+        if self.network_checker and not self.network_checker.is_healthy():
+            logging.debug("[Slack] ネットワーク不通のため送信スキップ: %s", channel)
+            return False
+
+        # Circuit breaker check - skip if too many consecutive failures
+        if not self.circuit_breaker.allow_request():
+            logging.debug("[Slack] サーキットブレーカーOPENのため送信スキップ: %s", channel)
+            return False
+
         payload = {'text': text}
         if blocks:
             payload['blocks'] = blocks
@@ -86,12 +104,14 @@ class SlackNotifier:
                 webhook_url,
                 json=payload,
                 headers={'Content-Type': 'application/json'},
-                timeout=10
+                timeout=(3, 7)
             )
             response.raise_for_status()
+            self.circuit_breaker.record_success()
             return True
         except requests.exceptions.RequestException as e:
-            print("[Slack] Failed to send to {}: {}".format(channel, e))
+            self.circuit_breaker.record_failure()
+            logging.warning("[Slack] Failed to send to %s: %s", channel, e)
             return False
 
     def upload_file(self, channel, file_path=None, file_content=None, filename=None,
@@ -114,7 +134,17 @@ class SlackNotifier:
             return True
 
         if not self.bot_token:
-            print("[Slack] Bot token not configured for file upload")
+            logging.warning("[Slack] Bot token not configured for file upload")
+            return False
+
+        # Network health check
+        if self.network_checker and not self.network_checker.is_healthy():
+            logging.debug("[Slack] ネットワーク不通のためファイルアップロードスキップ")
+            return False
+
+        # Circuit breaker check
+        if not self.circuit_breaker.allow_request():
+            logging.debug("[Slack] サーキットブレーカーOPENのためファイルアップロードスキップ")
             return False
 
         # Get channel ID
@@ -147,7 +177,7 @@ class SlackNotifier:
                     'filename': filename,
                     'length': file_size
                 },
-                timeout=30
+                timeout=(3, 27)
             )
             url_data = url_response.json()
 
@@ -164,13 +194,13 @@ class SlackNotifier:
                     upload_response = requests.post(
                         upload_url,
                         files={'file': f},
-                        timeout=60
+                        timeout=(3, 57)
                     )
             else:
                 upload_response = requests.post(
                     upload_url,
                     files={'file': (filename, file_content)},
-                    timeout=60
+                    timeout=(3, 57)
                 )
 
             if upload_response.status_code != 200:
@@ -186,18 +216,21 @@ class SlackNotifier:
                     'channel_id': channel_id,
                     'initial_comment': initial_comment or ''
                 },
-                timeout=30
+                timeout=(3, 27)
             )
             complete_data = complete_response.json()
 
             if not complete_data.get('ok'):
-                print("[Slack] Failed to complete upload: {}".format(complete_data.get('error')))
+                logging.warning("[Slack] Failed to complete upload: %s", complete_data.get('error'))
+                self.circuit_breaker.record_failure()
                 return False
 
+            self.circuit_breaker.record_success()
             return True
 
         except requests.exceptions.RequestException as e:
-            print("[Slack] Failed to upload file: {}".format(e))
+            self.circuit_breaker.record_failure()
+            logging.warning("[Slack] Failed to upload file: %s", e)
             return False
 
     def get_device_category(self, device_type):

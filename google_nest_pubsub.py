@@ -103,7 +103,7 @@ class GoogleNestPubSubClient:
         }
 
         try:
-            response = requests.post(self.TOKEN_URL, data=payload, timeout=30)
+            response = requests.post(self.TOKEN_URL, data=payload, timeout=(5, 25))
             response.raise_for_status()
             data = response.json()
 
@@ -166,7 +166,7 @@ class GoogleNestPubSubClient:
         }
 
         try:
-            response = requests.get(preview_url, headers=headers, timeout=30)
+            response = requests.get(preview_url, headers=headers, timeout=(5, 25))
             response.raise_for_status()
 
             if output_path:
@@ -262,7 +262,7 @@ class GoogleNestPubSubClient:
         }
 
         try:
-            response = requests.post(url, headers=headers, json=body, timeout=30)
+            response = requests.post(url, headers=headers, json=body, timeout=(5, 25))
             response.raise_for_status()
             logging.debug("Acknowledged %d messages", len(ack_ids))
 
