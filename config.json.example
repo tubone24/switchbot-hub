@@ -93,6 +93,15 @@
         "enabled": true,
         "port": 7777
     },
+    "hue": {
+        "enabled": false,
+        "bridge_ip": null,
+        "api_key": null
+    },
+    "smart_home_api": {
+        "enabled": true,
+        "port": 9000
+    },
     "logging": {
         "level": "INFO",
         "file": null

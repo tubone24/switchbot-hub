@@ -26,6 +26,14 @@ from chart_generator import ChartGenerator
 from garbage_notifier import GarbageNotifier
 from dashboard_server import DashboardServer
 from network_resilience import NetworkHealthChecker
+from smart_home_api import SmartHomeAPIServer
+
+# Optional: Hue API for Philips Hue integration
+try:
+    from hue_api import HueAPI
+    HUE_AVAILABLE = True
+except ImportError:
+    HUE_AVAILABLE = False
 
 # Optional: Local chart generator for Raspberry Pi (requires matplotlib)
 try:
@@ -212,6 +220,19 @@ class SwitchBotMonitor:
             except Exception as e:
                 logging.error("Failed to initialize Google Nest API: %s", e)
 
+        # Initialize Hue API (optional)
+        self.hue_api = None
+        hue_config = config.get('hue', {})
+        if hue_config.get('enabled', False) and HUE_AVAILABLE:
+            try:
+                self.hue_api = HueAPI(
+                    bridge_ip=hue_config.get('bridge_ip'),
+                    api_key=hue_config.get('api_key')
+                )
+                logging.info("Hue API initialized (bridge: %s)", hue_config.get('bridge_ip'))
+            except Exception as e:
+                logging.error("Failed to initialize Hue API: %s", e)
+
         # Initialize database
         db_path = config.get('database', {}).get('path', 'device_states.db')
         self.db = DeviceDatabase(db_path)
@@ -289,6 +310,9 @@ class SwitchBotMonitor:
         # Dashboard server
         self.dashboard_server = None
 
+        # Smart Home API server
+        self.smart_home_api_server = None
+
     def setup_dashboard_server(self):
         """Setup dashboard HTTP server."""
         dashboard_config = self.config.get('dashboard', {})
@@ -302,6 +326,27 @@ class SwitchBotMonitor:
         self.dashboard_server.start()
 
         logging.info("Dashboard available at http://localhost:%d", port)
+        return True
+
+    def setup_smart_home_api(self):
+        """Setup Smart Home REST API server."""
+        api_config = self.config.get('smart_home_api', {})
+        if not api_config.get('enabled', False):
+            logging.info("Smart Home API server disabled")
+            return False
+
+        port = api_config.get('port', 9000)
+
+        self.smart_home_api_server = SmartHomeAPIServer(
+            port=port,
+            switchbot_api=self.api,
+            hue_api=self.hue_api,
+            netatmo_api=self.netatmo_api,
+            nest_api=self.nest_api
+        )
+        self.smart_home_api_server.start()
+
+        logging.info("Smart Home API available at http://localhost:%d", port)
         return True
 
     def setup_webhook_server(self):
@@ -1601,6 +1646,9 @@ class SwitchBotMonitor:
         # Setup dashboard server
         self.setup_dashboard_server()
 
+        # Setup Smart Home API server
+        self.setup_smart_home_api()
+
         # Setup webhook server
         webhook_enabled = self.setup_webhook_server()
 
@@ -1721,6 +1769,10 @@ class SwitchBotMonitor:
         # Stop dashboard server
         if self.dashboard_server:
             self.dashboard_server.stop()
+
+        # Stop Smart Home API server
+        if self.smart_home_api_server:
+            self.smart_home_api_server.stop()
 
         # Stop webhook server
         if self.webhook_server:

@@ -228,6 +228,99 @@ class SwitchBotAPI:
         }
         return self._request('POST', '/webhook/deleteWebhook', data)
 
+    # ========== Device Commands ==========
+
+    def send_command(self, device_id, command, parameter='default', command_type='command'):
+        """
+        Send a command to a specific device.
+
+        Args:
+            device_id: Device ID to control
+            command: Command to send (e.g., 'turnOn', 'turnOff', 'setAll')
+            parameter: Command parameter (default: 'default')
+            command_type: Command type (default: 'command')
+
+        Returns:
+            dict: API response
+        """
+        endpoint = '/devices/{}/commands'.format(device_id)
+        data = {
+            'command': command,
+            'parameter': parameter,
+            'commandType': command_type
+        }
+        return self._request('POST', endpoint, data)
+
+    def set_air_conditioner(self, device_id, temperature, mode, fan_speed, power_state):
+        """
+        Control an air conditioner device.
+
+        Args:
+            device_id: Device ID of the air conditioner
+            temperature: Target temperature
+            mode: Operation mode (1=auto, 2=cool, 3=dry, 4=fan, 5=heat)
+            fan_speed: Fan speed (1=auto, 2=low, 3=medium, 4=high)
+            power_state: Power state ('on' or 'off')
+
+        Returns:
+            dict: API response
+        """
+        parameter = '{},{},{},{}'.format(temperature, mode, fan_speed, power_state)
+        return self.send_command(device_id, 'setAll', parameter)
+
+    def set_curtain(self, device_id, position, mode='ff'):
+        """
+        Set curtain position.
+
+        Args:
+            device_id: Device ID of the curtain
+            position: Target position (0=fully open, 100=fully closed)
+            mode: Movement mode (0=performance, 1=silent, ff=default)
+
+        Returns:
+            dict: API response
+        """
+        parameter = '0,{},{}'.format(mode, position)
+        return self.send_command(device_id, 'setPosition', parameter)
+
+    def open_curtain(self, device_id):
+        """
+        Fully open a curtain.
+
+        Args:
+            device_id: Device ID of the curtain
+
+        Returns:
+            dict: API response
+        """
+        return self.send_command(device_id, 'turnOn')
+
+    def close_curtain(self, device_id):
+        """
+        Fully close a curtain.
+
+        Args:
+            device_id: Device ID of the curtain
+
+        Returns:
+            dict: API response
+        """
+        return self.send_command(device_id, 'turnOff')
+
+    def toggle_device(self, device_id, power_on=True):
+        """
+        Toggle a device on or off (e.g., plug, bot).
+
+        Args:
+            device_id: Device ID to toggle
+            power_on: True to turn on, False to turn off
+
+        Returns:
+            dict: API response
+        """
+        command = 'turnOn' if power_on else 'turnOff'
+        return self.send_command(device_id, command)
+
 
 if __name__ == '__main__':
     # Simple test - requires config.json
